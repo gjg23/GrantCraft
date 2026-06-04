@@ -1,9 +1,14 @@
 // main.cpp (server)
-#include <enet/enet.h>
-#include <iostream>
-#include <unistd.h>
 
-int main() {
+#include <cstdio>
+#include <cstdlib>
+#include <chrono>
+#include <thread>
+#include <enet/enet.h>
+
+#include "server/server.hpp"
+
+int main(int argc, char* argv[]) {
     // check init
     if (enet_initialize() != 0) {
         fprintf(stderr, "Failed to initialize ENet\n");
@@ -11,25 +16,44 @@ int main() {
     }
 
     // bind ports
-    ENetAddress addr;
-    addr.host = ENET_HOST_ANY;
-    addr.port = 7777;
+    uint16_t port = 7777; // default
+    if (argc >= 2) {
+        port = static_cast<uint16_t>(std::atoi(argv[1]));
+    }
 
     // make server
-    ENetHost* server = enet_host_create(
-        &addr,
-        32, // max clients
-        2,  // chanels
-        0,  // incoming bandwith
-        0   // outgoing bandwith
-    );
-    if (!server) {
-        fprintf(stderr, "Failed to create server\n");
+    Server server;
+    if (!server.init(port)) {
+        enet_deinitialize();
+        fprintf(stderr, "Server init failed.\n");
         exit(EXIT_FAILURE);
     }
+    printf("[Server] Running on port %d\n", port);
+
+    // ------------------------------------------------------------------
+    // Fixed-timestep server loop
+    // 20 ticks per second mirrors Minecraft's server tick rate
+    // ------------------------------------------------------------------
+    constexpr float TICK_RATE = 20.0f;
+    constexpr float TICK_DT   = 1.0f / TICK_RATE;
+    auto targetDuration = std::chrono::duration<float>(TICK_DT);
 
     // start server loop
-    while (true) {
-        ENetEvent event;
+    while (server.isRunning()) {
+        auto frameStart = std::chrono::steady_clock::now();
+
+        server.tick(TICK_DT);
+
+        // Sleep for the remainder of the tick budget so we don't
+        // burn 100% CPU just waiting for network events
+        auto elapsed = std::chrono::steady_clock::now() - frameStart;
+        auto sleep   = targetDuration - elapsed;
+        if (sleep > std::chrono::duration<float>(0)) {
+            std::this_thread::sleep_for(sleep);
+        }
     }
+
+    server.shutdown();
+    enet_deinitialize();
+    return 0;
 }
