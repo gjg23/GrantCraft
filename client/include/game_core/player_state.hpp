@@ -41,7 +41,7 @@ public:
 
 private:
     float dt          = 0.f;
-    float speed       = 10.f;
+    float speed       = 100.f;
     float sprintMag   = 2.f;
     bool  sprinting   = false;
     bool  isGrounded  = false;

@@ -15,9 +15,9 @@
 
 using namespace Terrain;
 
-std::unique_ptr<Chunk> generateTerrain(const ChunkCoord& coord) {
-    auto chunk = std::make_unique<Chunk>(coord);
-    chunk->blocks.resize(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE, BlockType::Air);
+Chunk generateTerrain(const ChunkCoord& coord) {
+    Chunk chunk(coord);
+    chunk.blocks.resize(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE, BlockType::Air);
 
     const int originX = coord.x * CHUNK_SIZE;
     const int originY = coord.y * CHUNK_SIZE;
@@ -110,7 +110,7 @@ std::unique_ptr<Chunk> generateTerrain(const ChunkCoord& coord) {
                 }
             }
 
-            chunk->setBlock(lx, ly, lz, block);
+            chunk.setBlock(lx, ly, lz, block);
         }}
     }
 

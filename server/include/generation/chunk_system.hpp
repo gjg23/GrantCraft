@@ -30,13 +30,18 @@ enum class ChunkState {
     Ready,
 };
 
+enum class GenBackend {
+    CPU,
+    GPU,  // boilerplate for now - currently no gpu support
+};
+
 struct ChunkRuntime {
     ChunkState state = ChunkState::Unloaded;
 };
 
 class ChunkSystem {
 public:
-    ChunkSystem(WorldState& world);
+    ChunkSystem(WorldState& world, GenBackend backend = GenBackend::CPU);
     void init();
 
     void update(const std::vector<PlayerSnapshot>& snapshots);
@@ -47,31 +52,51 @@ public:
 
     void setRenderDistance(int r) { renderDistance = r; }
 
-    void enqueueIfNeeded(const ChunkCoord& coord);      // single
+    void enqueueIfNeeded(const ChunkCoord& coord, const std::vector<ChunkCoord>& centers);      // single
 
     void shutdown();
 private:
     // World data to broadcast
     WorldState& world;
+    // GPU or CPU device
+    GenBackend  backend;
 
     // Chunk pipeline map
     std::unordered_map<ChunkCoord, ChunkRuntime, ChunkCoordHash> runtime;
     std::mutex runtimeMutex;
 
-    // Gen queue
-    std::queue<ChunkCoord>  genQueue;
-    std::mutex              genQueueMutex;
-    std::condition_variable genQueueCV;
 
+    // ============================
+    // Gen queue
+    // ============================
+    // Priority queue sorted nearest-first
+    struct PriCoord {
+        ChunkCoord coord;
+        int        distSq;  // XZ distance squared from nearest player
+        bool operator>(const PriCoord& o) const { return distSq > o.distSq; }
+    };
+    std::priority_queue<PriCoord,
+                        std::vector<PriCoord>,
+                        std::greater<PriCoord>> genQueue;
+    std::mutex              genQueueMutex;  // mutex
+    std::condition_variable genQueueCV;     // signal
+
+    // ============================
     // Ready list
+    // ============================
     std::vector<ChunkCoord> readyChunks;
     std::mutex              readyMutex;
 
+    // ============================
     // Worker thread pool
+    // ============================
     std::vector<std::thread> workers;
     std::atomic<bool> worker_running{false};
 
-    int renderDistance = 8;
+    int renderDistance = 8; // TODO - make setting.hpp namespace thing
+
+    // Most recent player chunk centers — used for priority scoring
+    int closestDistSq(const ChunkCoord& coord, const std::vector<ChunkCoord>& centers);
 
     // chunk gen pipeline
     void enqueueNeededChunks(const ChunkCoord& center); // multiple

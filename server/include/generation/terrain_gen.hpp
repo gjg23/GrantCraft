@@ -7,4 +7,4 @@
 #include "world/chunk.hpp"
 #include <memory>
 
-std::unique_ptr<Chunk> generateTerrain(const ChunkCoord& coord);
+Chunk generateTerrain(const ChunkCoord& coord);

@@ -37,6 +37,13 @@ void ChunkInterestSystem::computeDelta(EntityId id,
 
 // Update loop called in server.cpp to enqueue needed chunks
 void ChunkInterestSystem::update(Registry& ecs, ChunkSystem& chunkSystem) {
+    // Build centers from all known player positions for priority scoring
+    std::vector<ChunkCoord> centers;
+    centers.reserve(playerStates.size());
+    for (auto& [id, state] : playerStates)
+        if (state.lastChunk.x != INT_MAX)  // skip uninitialized
+            centers.push_back(state.lastChunk);
+    
     // loop through all player entities
     for (auto& [id, pos] : ecs.allPositions()) {
         ChunkCoord center = toChunkCoord(pos.pos);
@@ -54,7 +61,7 @@ void ChunkInterestSystem::update(Registry& ecs, ChunkSystem& chunkSystem) {
         computeDelta(id, state, center, toLoad, toUnload);
 
         // Submit needed chunks to the generation pipeline
-        for (auto& coord : toLoad) chunkSystem.enqueueIfNeeded(coord);
+        for (auto& coord : toLoad) chunkSystem.enqueueIfNeeded(coord, centers);
 
         // Remove unloaded chunks from the player's loaded set
         // (client unload packet goes out in networkFlush)
