@@ -1,49 +1,109 @@
 #pragma once
-// ------------------------------------------------------------------
-// renderer.h
-// Minimal OpenGL renderer for the initial prototype.
-// Draws a single coloured cube at a given position.
-// Replace / extend with your full chunk renderer later.
-// ------------------------------------------------------------------
+// render/renderer.hpp
 
 #include <glad.h>
 #include <glm/glm.hpp>
 #include <world/chunk.hpp>
 #include "render/chunk_mesh.hpp"
+
 #include <unordered_map>
 
+class ChunkManager;
+
+// ------------------------------------------------------------------
+// RenderContext - passed each frame to all render calls
+// ------------------------------------------------------------------
+struct RenderContext {
+    glm::mat4 proj;
+    glm::mat4 view;
+
+    glm::vec3 sunDir;
+    glm::vec3 sunColor;
+    glm::vec3 ambientColor;
+
+    glm::vec3 skyZenith;
+    glm::vec3 skyHorizon;
+};
+
+// ------------------------------------------------------------------
+// Cached uniform locations for each shader
+// ------------------------------------------------------------------
+struct BlockUniforms {
+    GLint sunDir       = -1;
+    GLint sunColor     = -1;
+    GLint ambientColor = -1;
+    GLint model        = -1;
+    GLint view         = -1;
+    GLint proj         = -1;
+};
+
+struct SkyUniforms {
+    GLint invProjView = -1;
+    GLint camPos      = -1;
+    GLint skyZenith   = -1;
+    GLint skyHorizon  = -1;
+    GLint sunDir      = -1;
+    GLint sunStrength = -1;
+};
+
+// ------------------------------------------------------------------
+// DayNightCycle - drives lighting & sky colours over time
+// ------------------------------------------------------------------
+class DayNightCycle {
+public:
+    float timeOfDay = 0.25f; // start at morning
+    float speed     = 0.005f;
+
+    void update(float dt);
+    void fill(RenderContext& ctx);
+};
+
+// ------------------------------------------------------------------
+// Renderer
+// ------------------------------------------------------------------
 class Renderer {
 public:
-    // Upload geometry to the GPU - call once after GL context is ready
-    bool init();
+    // atlas is a GL texture ID from loadTexture().
+    void init(unsigned int skyShader, unsigned int blockShader, unsigned int atlas);
 
-    // Draw a cube at worldPos with a flat colour
+    void beginFrame();
+    void renderSky  (const RenderContext& ctx, const glm::vec3& camPos);
+    void renderWorld(const RenderContext& ctx, const glm::mat4& view, const glm::mat4& proj);
+
+    // Old: just used for drawing the player cubes
     void drawCube(const glm::mat4& view,
                   const glm::mat4& proj,
                   const glm::vec3& worldPos,
                   const glm::vec3& colour);
 
-    // Placeholder: draws a wireframe outline of the chunk boundary.
-    // Replace the body with a real mesh draw call once ChunkMesh exists.
-    void drawChunk(const glm::mat4& view,
-                   const glm::mat4& proj,
-                   const ChunkCoord& coord);
-
+    void submitChunk(const ChunkCoord& coord, const Chunk& chunk);
     void cleanup();
 
-    void submitChunk(const ChunkCoord& coord, const Chunk& chunk);
-    void drawChunks (const glm::mat4& view, const glm::mat4& proj);
-
 private:
-    GLuint m_vao    = 0;
-    GLuint m_vbo    = 0;
-    GLuint m_shader = 0;
+    // Programs
+    GLuint m_skyShader   = 0;
+    GLuint m_blockShader = 0;
 
-    GLint m_uMVP    = -1;
-    GLint m_uColour = -1;
+    // Cached uniform locations
+    SkyUniforms   m_skyLocs;
+    BlockUniforms m_blockLocs;
 
-    // Compile a GLSL shader stage and return its ID
-    GLuint compileShader(GLenum type, const char* src);
+    // Sky fullscreen triangle
+    GLuint m_skyVAO = 0;
 
+    // Texture atlas
+    GLuint m_atlasTex = 0;
+
+    // Chunk meshes, keyed by coord
     std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash> m_meshes;
+
+    // Cube geometry for drawCube()
+    GLuint m_cubeVAO    = 0;
+    GLuint m_cubeVBO    = 0;
+    GLuint m_cubeShader = 0;   // simple MVP+colour shader, compiled inline
+    GLint  m_uMVP       = -1;
+    GLint  m_uColour    = -1;
+
+    GLuint compileCubeShader(); // compiles the hardcoded MVP shader
+    GLuint compileShader(GLenum type, const char* src);
 };

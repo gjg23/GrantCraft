@@ -31,3 +31,10 @@ enum class BlockType : uint8_t {
 inline bool isOpaque(BlockType b) {
     return b != BlockType::Air;
 }
+
+// Returns the texture atlas row index for a block face.
+// Atlas layout (row per block type, 6 faces per row):
+// Row 0 = Air (unused), Row 1 = Dirt, Row 2 = Grass, Row 3 = Stone
+// Faces order: +X, -X, +Y (top), -Y (bottom), +Z, -Z
+inline int getTextureRow(BlockType b) { return static_cast<int>(b); }
+inline int getTextureRow(int i)       { return i; } // overload for b+1 arithmetic

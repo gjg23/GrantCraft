@@ -3,6 +3,8 @@ add_library(renderer
     src/render/renderer.cpp
     src/render/window.cpp
     src/render/chunk_mesh.cpp
+    src/render/shader.cpp
+    src/render/texture.cpp
 )
 target_include_directories(renderer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -14,6 +16,8 @@ if(TARGET glfw3::glfw3)
 else()
     set(GLFW_TARGET glfw)
 endif()
+
+target_link_libraries(renderer PRIVATE stb_image)
 
 target_link_libraries(renderer PUBLIC
     glad
@@ -38,14 +42,13 @@ target_include_directories(game_core PUBLIC
 target_link_libraries(game_core PRIVATE
     shared_lib
     glad
+    ${GLFW_TARGET}
 )
 
 # ===== Client Core ===================================
 add_library(client_core
     src/client_core/client.cpp
     src/client_core/local_server.cpp
-    src/render/renderer.cpp
-    src/render/window.cpp
 )
 target_include_directories(client_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -55,7 +58,10 @@ target_include_directories(client_core PUBLIC
 target_link_libraries(client_core PRIVATE
     shared_lib
     server_lib
+    renderer
     glad
+    enet
+    ${GLFW_TARGET}
 )
 
 # ===== Game Client Executable ===================================
@@ -66,5 +72,8 @@ add_executable(game_client
 target_link_libraries(game_client PRIVATE
     client_core
     game_core
-    renderer
+    enet
+    ${GLFW_TARGET}
+    glad
+    server_lib
 )

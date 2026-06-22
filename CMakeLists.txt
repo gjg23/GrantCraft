@@ -3,9 +3,13 @@ project(GrantCraft)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ----- ENet for networking -----
 add_subdirectory(third_party/enet)
+target_include_directories(enet PUBLIC
+    ${CMAKE_SOURCE_DIR}/third_party/enet/include
+)
 
 # ----- OPenGL for client rendering -----
 find_package(OpenGL REQUIRED)
@@ -28,6 +32,11 @@ find_package(glm REQUIRED)
 add_library(glad STATIC third_party/glad/src/glad.c)
 target_include_directories(glad PUBLIC ${CMAKE_SOURCE_DIR}/third_party/glad/include)
 
+# STB Image - header only
+add_library(stb_image INTERFACE)
+target_include_directories(stb_image INTERFACE
+    ${CMAKE_SOURCE_DIR}/third_party/stb_image
+)
 
 # ----- Subdirectories -----
 add_subdirectory(shared)

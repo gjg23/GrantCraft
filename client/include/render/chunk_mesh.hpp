@@ -7,9 +7,10 @@
 #include "world/chunk.hpp"
 
 struct ChunkMesh {
-    GLuint vao       = 0;
-    GLuint vbo       = 0;
-    int    vertCount = 0;
+    GLuint vao = 0;
+    GLuint vbo = 0;
+    GLuint ebo = 0;       // index buffer
+    int indexCount = 0;
 
     bool built = false;
 

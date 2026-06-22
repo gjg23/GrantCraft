@@ -67,8 +67,8 @@ private:
     std::vector<ChunkCoord> readyChunks;
     std::mutex              readyMutex;
 
-    // Worker thread
-    std::thread       worker;
+    // Worker thread pool
+    std::vector<std::thread> workers;
     std::atomic<bool> worker_running{false};
 
     int renderDistance = 8;

@@ -17,10 +17,17 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+// client core
 #include "client_core/local_server.hpp"
 #include "client_core/client.hpp"
+
+// renderer
 #include "render/renderer.hpp"
 #include "render/window.hpp"
+#include "render/shader.hpp"
+#include "render/texture.hpp"
+
+// game core
 #include "game_core/camera.hpp"
 #include "game_core/input.hpp"
 #include "game_core/remote_player.hpp"
@@ -72,9 +79,7 @@ int main(int argc, char* argv[]) {
 
     // Create game window
     Window win;
-    GLFWmonitor* mon = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(mon);
-    if (!win.init(mode->width, mode->height, "Masters Project")) {
+    if (!win.init(1280, 720, "Masters Project")) {
         fprintf(stderr, "window creation failed\n");
         enet_deinitialize();
         exit(EXIT_FAILURE);
@@ -95,12 +100,18 @@ int main(int argc, char* argv[]) {
     // Remote players populated by Client::onReceive — keyed by player ID
     std::unordered_map<uint32_t, RemotePlayer> remotePlayers;
     
+    // ------------------------------------------------------------------
     // renderer
-    Renderer renderer;
-    if (!renderer.init()) {
-        fprintf(stderr, "Renderer init failed\n");
+    // ------------------------------------------------------------------
+    unsigned int skyShader   = loadShader("shaders/sky.vert",   "shaders/sky.frag");
+    unsigned int blockShader = loadShader("shaders/basic.vert", "shaders/basic.frag");
+    if (!skyShader || !blockShader) {
+        fprintf(stderr, "Shader loading failed\n");
         exit(EXIT_FAILURE);
     }
+    Renderer renderer;
+    renderer.init(skyShader, blockShader, loadTexture("textures/atlas_2.png"));
+    DayNightCycle dayNight;
 
     // ------------------------------------------------------------------
     // Connect to the server (local or remote)
@@ -111,13 +122,6 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Could not connect to server.\n");
         exit(EXIT_FAILURE);
     }
-
-    // ------------------------------------------------------------------
-    // Projection matrix - fixed FOV, updated on resize in a real app
-    // ------------------------------------------------------------------
-    glm::mat4 proj = glm::perspective(glm::radians(70.0f),
-                                      1280.0f / 720.0f,
-                                      0.1f, 1000.0f);
 
     // ------------------------------------------------------------------
     // Main loop
@@ -155,16 +159,20 @@ int main(int argc, char* argv[]) {
         }
 
         // Render
-        glClearColor(0.53f, 0.81f, 0.98f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        dayNight.update(dt);
 
-        glm::mat4 view = localPlayer.cam.getViewMatrix();
+        RenderContext ctx;
+        ctx.proj = glm::perspective(glm::radians(70.0f), win.aspectRatio(), 0.1f, 1000.0f);
+        ctx.view = localPlayer.cam.getViewMatrix();
+        dayNight.fill(ctx);
 
-        renderer.drawChunks(view, proj);
+        renderer.beginFrame();
+        renderer.renderSky(ctx, localPlayer.cam.position);  // needs cam.position exposed
+        renderer.renderWorld(ctx, ctx.view, ctx.proj);
 
-        // Draw remote players as cubes
+        // Remote players still use drawCube
         for (auto& [id, rp] : client.getRemotePlayers())
-            renderer.drawCube(view, proj, rp.state.position, {0.9f, 0.2f, 0.2f});
+            renderer.drawCube(ctx.view, ctx.proj, rp.state.position, {0.9f, 0.2f, 0.2f});
 
         win.swapAndPoll();
     }
@@ -179,7 +187,7 @@ int main(int argc, char* argv[]) {
         localServer.stop();
     }
 
-    // window.destroy();
+    win.destroy();
     enet_deinitialize();
     return 0;
 }

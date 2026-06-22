@@ -59,6 +59,7 @@ void Server::tick(float dt) {
         [this, dt]{ systemPlayerPhysics(dt); }
     });
 
+    // Enqueue and generate needed chunks
     scheduler->enqueue({
         TaskType::ChunkGenerate, TaskPriority::Normal,
         [this, dt]{ systemChunkInterest(dt); }

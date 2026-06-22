@@ -1,8 +1,9 @@
 # ----- Chunk System -----
 add_library(chunk_core STATIC
     src/generation/chunk_system.cpp
-    src/generation/terrain_gen.cpp
     src/generation/chunk_interest.cpp
+    src/generation/terrain_gen.cpp
+    src/generation/terrain_detail.cpp
 )
 target_include_directories(chunk_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
