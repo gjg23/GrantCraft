@@ -5,8 +5,9 @@
 #include <cstdint>
 
 enum class TaskType {
-    ChunkGenerate,      // CPU heavy - generate one chunk
-    ChunkSend,          // network heavy - send chunk data to a peer
+    ChunkGenerate,      // generate one chunk
+    ChunkDispatch,      // queue chunk
+    ChunkSend,          // send chunk data to a peer
     PlayerPhysics,      // update one player's position/velocity
     EntitySimulation,   // tick a batch of entities
     NetworkFlush,       // broadcast player states to all clients

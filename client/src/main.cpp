@@ -32,36 +32,104 @@
 #include "game_core/input.hpp"
 #include "game_core/remote_player.hpp"
 
-int main(int argc, char* argv[]) {
-    // ------------------------------------------------------------------
-    // Determine mode from arguments
-    // ./game_client                            # singleplayer CPU
-    // ./game_client --gpu                      # singleplayer GPU
-    // ./game_client 192.168.1.5 25565          # multiplayer CPU
-    // ./game_client 192.168.1.5 25565 --gpu    # multiplayer GPU
-    // ------------------------------------------------------------------
-    ServerMode mode = ServerMode::CPU;
-    int filteredArgc = 0;
-    char* filteredArgv[8] = {};
-    filteredArgv[filteredArgc++] = argv[0];
+// Debug
+#include "bench/bench_mode.hpp"
+#include "bench/debug_mode.hpp"
 
+int main(int argc, char* argv[]) {
+    // -----------------------------------------------------------------------------
+    // Usage:
+    // Singleplayer
+    //   ./game_client
+    //   ./game_client --gpu
+    //   ./game_client --cpu
+    //
+    // Multiplayer
+    //   ./game_client <host> <port>
+    //   ./game_client <host> <port> --gpu
+    //   ./game_client <host> <port> --cpu
+    //
+    // Benchmark
+    //   ./game_client --bench
+    //   ./game_client --bench --host <host> --port <port>
+    //   ./game_client --bench --user <name>
+    //   ./game_client --bench --bench-radius <radius>
+    //
+    // Debug
+    //   ./game_client --debug
+    //   ./game_client --debug --host <host> --port <port>
+    //   ./game_client --debug --user <name>
+    //
+    // -----------------------------------------------------------------------------
+    
+    // Defaults
+    ServerMode mode = ServerMode::CPU;
+    const char* host     = "127.0.0.1";
+    uint16_t    port     = 7777;
+    const char* username = "player";
+    bool isBench = false;
+    bool isDebug = false;
+    int radius = -1;
+    const char* remoteHost = nullptr;
+    uint16_t remotePort = 0;
+
+    // Parsing loop
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--gpu") == 0)
+        if (strcmp(argv[i], "--gpu") == 0) {
             mode = ServerMode::GPU;
-        else if (strcmp(argv[i], "--cpu") == 0)
+        }
+        else if (strcmp(argv[i], "--cpu") == 0) {
             mode = ServerMode::CPU;
-        else
-            filteredArgv[filteredArgc++] = argv[i];
+        }
+        else if (strcmp(argv[i], "--bench") == 0) {
+            isBench = true;
+        }
+        else if (strcmp(argv[i], "--debug") == 0) {
+            isDebug = true;
+        }
+        else if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
+            host = argv[++i];
+        }
+        else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+            port = static_cast<uint16_t>(atoi(argv[++i]));
+        }
+        else if (strcmp(argv[i], "--user") == 0 && i + 1 < argc) {
+            username = argv[++i];
+        }
+        else if (strcmp(argv[i], "--bench-radius") == 0 && i + 1 < argc) {
+            radius = atoi(argv[++i]);
+        }
+        else if (!remoteHost) {
+            remoteHost = argv[i];
+        }
+        else if (remotePort == 0) {
+            remotePort = static_cast<uint16_t>(atoi(argv[i]));
+        }
+        else {
+            fprintf(stderr, "Unknown argument: %s\n", argv[i]);
+            return 1;
+        }
     }
 
-    bool        singleplayer = (filteredArgc < 3);
-    const char* remoteHost   = singleplayer ? "127.0.0.1" : filteredArgv[1];
-    uint16_t    remotePort   = singleplayer ? 7778        : static_cast<uint16_t>(atoi(filteredArgv[2]));
+    const bool singleplayer = (remoteHost == nullptr);
 
-    if (filteredArgc != 1 && filteredArgc != 3) {
-        fprintf(stderr, "Usage: %s [host] [port] [--gpu|--cpu]\n", argv[0]);
+    // branch into different modes
+    if (singleplayer) {
+        remoteHost = "127.0.0.1";
+        remotePort = 7778;
+    }
+    if (isBench) {
+        runBenchMode(host, port, username, radius);
+        return 0;
+    }
+    if (!singleplayer && remotePort == 0) {
+        fprintf(stderr, "Usage: %s [host port] [--gpu|--cpu]\n", argv[0]);
         return 1;
     }
+
+    // Setup debugger if enabled (just extra terminal output)
+    DebugOverlay debug;
+    if (isDebug) debug.init();
 
     // Start ENet client
     printf("Starting ENet.\n");
@@ -167,6 +235,7 @@ int main(int argc, char* argv[]) {
 
         // Pump incoming packets — updates client.getRemotePlayers()
         client.tick();
+        if (isDebug) debug.update(client);
         for (const auto& coord : client.getAndClearNewChunks()) {
             const auto& chunks = client.getChunks();
             auto it = chunks.find(coord);
@@ -174,6 +243,7 @@ int main(int argc, char* argv[]) {
                 // Pass a copy of the block data; renderer owns it from here
                 renderer.submitChunk(coord, it->second.blocks);
             }
+            if (isDebug) debug.onChunkReceived();
         }
 
         // Render

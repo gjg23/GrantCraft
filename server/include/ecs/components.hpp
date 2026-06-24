@@ -7,8 +7,6 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <enet/enet.h>
-#include <unordered_set>
-#include "generation/chunk_system.hpp"
 
 using EntityId = uint32_t;
 constexpr EntityId NULL_ENTITY = 0;
@@ -21,20 +19,12 @@ struct PositionComp {
 };
 
 struct NetworkComp {
-    ENetPeer* peer = nullptr;
-    uint32_t playerId = 0;
-    char username[16] = {};
-
-    // Chunks waiting to be transmitted.
-    std::deque<ChunkCoord> pendingChunkSends;
-
-    // Prevent duplicate queueing while waiting.
-    std::unordered_set<ChunkCoord, ChunkCoordHash> queuedChunkSends;
-
+    ENetPeer* peer          = nullptr;
+    uint32_t  playerId      = 0;
+    char      username[16]  = {};
 };
 
-// Which chunks this entity has been sent; used to avoid re-sending.
+// component for future code
 struct ChunkInterestComp {
     int renderDistance = 8;
-    std::unordered_set<ChunkCoord, ChunkCoordHash> sentChunks;
 };

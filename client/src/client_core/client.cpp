@@ -158,8 +158,8 @@ void Client::onReceive(ENetPacket* packet) {
 
             ChunkCoord coord{ pkt.cx, pkt.cy, pkt.cz };
             Chunk chunk(coord);
-            chunk.blocks.resize(BLOCKS_PER_CHUNK);
-            memcpy(chunk.blocks.data(), pkt.blocks, BLOCKS_PER_CHUNK * sizeof(BlockType));
+            chunk.blocks.resize(CHUNK_VOLUME);
+            memcpy(chunk.blocks.data(), pkt.blocks, CHUNK_VOLUME * sizeof(BlockType));
 
             std::lock_guard<std::mutex> lk(m_chunkMutex);
             m_chunks[coord] = std::move(chunk);
@@ -167,7 +167,32 @@ void Client::onReceive(ENetPacket* packet) {
             break;
         }
 
+        case PacketType::S_DEBUG_SNAPSHOT: {
+            if (packet->dataLength < sizeof(PKT_S_DebugSnapshot)) break;
+            memcpy(&m_debugSnapshot, packet->data, sizeof(PKT_S_DebugSnapshot));
+            m_hasDebugSnapshot = true;
+            break;
+        }
+
         default:
             break;
     }
+}
+
+
+// ---- debug helpers ----
+void Client::sendDebugQuery() {
+    if (!m_connected) return;
+    PKT_C_DebugQuery pkt;
+    enet_peer_send(m_peer, CHANNEL_RELIABLE,
+                   makePacket(pkt, ENET_PACKET_FLAG_RELIABLE));
+}
+
+bool Client::hasPendingDebugSnapshot() const {
+    return m_hasDebugSnapshot;
+}
+
+PKT_S_DebugSnapshot Client::popDebugSnapshot() {
+    m_hasDebugSnapshot = false;
+    return m_debugSnapshot;
 }

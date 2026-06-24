@@ -7,9 +7,7 @@
 
 #include <cstdint>
 #include <unordered_map>
-#include <unordered_set>
 #include "ecs/components.hpp"
-#include "world/chunk.hpp"
 
 class Registry {
 public:

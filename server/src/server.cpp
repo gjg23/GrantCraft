@@ -3,21 +3,20 @@
 // ===================================================
 
 #include "server/server.hpp"
-#include "scheduler/fifo_sched.hpp"
-#include "ecs/components.hpp"
 #include "generation/gpu_terrain/kernel.cuh"
+#include "ecs/components.hpp"
+#include "net/debug_packets.hpp"
 
 #include <cstdio>
 #include <cstring>
 #include <chrono>
+#include <algorithm>
 
 
 // ------------------------------------------------------------------
 // Start server
 // ------------------------------------------------------------------
 bool Server::init(uint16_t port, ServerMode mode) {
-    
-    
     ENetAddress address;
     address.host = ENET_HOST_ANY;
     address.port = port;
@@ -28,19 +27,60 @@ bool Server::init(uint16_t port, ServerMode mode) {
         return false;
     }
 
+    // init timer
+    m_tickRateTimer = std::chrono::steady_clock::now();
+
     serverMode = mode;
+    GenBackend backend = (serverMode == ServerMode::GPU) ? GenBackend::GPU : GenBackend::CPU;
     if (serverMode == ServerMode::GPU)
         uploadTerrainParams(makeTerrainParams());
+    
+    workerPool = std::make_unique<ChunkWorkerPool>(backend);
+    workerPool->init();
 
-    scheduler   = std::make_unique<FifoScheduler>();
-    GenBackend backend = (serverMode == ServerMode::GPU) ? GenBackend::GPU : GenBackend::CPU;
-    chunkSystem = std::make_unique<ChunkSystem>(world, backend);
-    chunkSystem->init();
-    chunkSystem->waitForSpawnChunks(2);
+    scheduler = std::make_unique<FifoScheduler>();
+
+    generate_spawn_chunks();
 
     net_running = true;
     printf("[Server] Listening on port %u\n", port);
     return true;
+}
+
+void Server::generate_spawn_chunks() {
+    constexpr int SPAWN_RADIUS = 2;
+    for (int dx = -SPAWN_RADIUS; dx <= SPAWN_RADIUS; ++dx)
+    for (int dy = 0;             dy <= SPAWN_RADIUS; ++dy)
+    for (int dz = -SPAWN_RADIUS; dz <= SPAWN_RADIUS; ++dz) {
+        ChunkCoord c{ dx, dy, dz };
+        int distSq = dx*dx + dy*dy + dz*dz;
+        chunkRegistry.request(c, NULL_ENTITY); // no subscriber, just warm the world
+        workerPool->submit(c, distSq);
+    }
+
+    // Block until spawn chunks are in WorldState
+    bool allReady = false;
+    while (!allReady) {
+        if (serverMode == ServerMode::GPU)
+            workerPool->pollGPU();
+
+        auto completed = workerPool->drainCompleted();
+        for (auto& cc : completed) {
+            world.insertChunk(cc.coord) = std::move(cc.data);
+            chunkRegistry.markWorldReady(cc.coord);
+        }
+
+        allReady = true;
+        for (int dx = -SPAWN_RADIUS; dx <= SPAWN_RADIUS && allReady; ++dx)
+        for (int dy = 0;             dy <= SPAWN_RADIUS && allReady; ++dy)
+        for (int dz = -SPAWN_RADIUS; dz <= SPAWN_RADIUS && allReady; ++dz) {
+            auto* chunk = world.getChunk({dx, dy, dz});
+            if (!chunk) allReady = false;
+        }
+
+        if (!allReady)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 }
 
 
@@ -50,14 +90,30 @@ bool Server::init(uint16_t port, ServerMode mode) {
 void Server::tick(float dt) {
     auto tickStart = std::chrono::steady_clock::now();
 
+    // Record debug stats
+    ++m_tickCount;
+    auto tickRateNow = std::chrono::steady_clock::now();
+    float sinceTimer = std::chrono::duration<float>(tickRateNow - m_tickRateTimer).count();
+    if (sinceTimer >= 1.0f) {
+        m_measuredTickHz  = m_tickCount;
+        m_tickCount       = 0;
+        m_tickRateTimer   = tickRateNow;
+    }
+
     // --- Network events (not scheduled — must always run first) ---
     ENetEvent event;
     while (enet_host_service(net_host, &event, 0) > 0) {
         switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT:    onConnect(event.peer);                    break;
-            case ENET_EVENT_TYPE_RECEIVE:    onReceive(event.peer, event.packet);
-                                             enet_packet_destroy(event.packet);        break;
-            case ENET_EVENT_TYPE_DISCONNECT: onDisconnect(event.peer);                 break;
+            case ENET_EVENT_TYPE_CONNECT:
+                onConnect(event.peer);
+                break;
+            case ENET_EVENT_TYPE_RECEIVE:
+                onReceive(event.peer, event.packet);
+                enet_packet_destroy(event.packet);
+                break;
+            case ENET_EVENT_TYPE_DISCONNECT:
+                onDisconnect(event.peer);
+                break;
             default: break;
         }
     }
@@ -68,12 +124,19 @@ void Server::tick(float dt) {
         [this, dt]{ systemPlayerPhysics(dt); }
     });
 
-    // Enqueue and generate needed chunks
+    // Enqueue chunks
     scheduler->enqueue({
         TaskType::ChunkGenerate, TaskPriority::Normal,
-        [this, dt]{ systemChunkInterest(dt); }
+        [this, dt]{ systemInterestUpdate(dt); }
     });
 
+    // dispatch workers
+    scheduler->enqueue({ 
+        TaskType::ChunkGenerate, TaskPriority::Normal,
+        [this, dt]{ systemChunkDispatch(dt); } 
+    });
+
+    // send out chunks
     scheduler->enqueue({
         TaskType::NetworkFlush, TaskPriority::High,
         [this, dt]{ systemNetworkFlush(dt); }
@@ -82,10 +145,13 @@ void Server::tick(float dt) {
     // Run tasks within 45ms — leaves 5ms headroom for network polling overhead
     scheduler->tick(45.f);
 
-    // Feed metrics back (useful no-op for FifoScheduler, used by AdaptiveScheduler)
+    // Feed metrics back & debug metrics
     auto elapsed = std::chrono::steady_clock::now() - tickStart;
     float tickMs = std::chrono::duration<float, std::milli>(elapsed).count();
-    scheduler->reportMetrics(tickMs, 0, 0); // bytesSent tracking comes later
+    m_lastTickMs = tickMs;
+    scheduler->reportMetrics(tickMs, 0, 0);
+    m_bytesSentTick = 0;
+    m_bytesRecvTick = 0;
 }
 
 
@@ -95,7 +161,7 @@ void Server::tick(float dt) {
 void Server::shutdown() {
     if (!net_host) return;
 
-    chunkSystem->shutdown();
+    workerPool->shutdown();
 
     // Gracefully disconnect all peers
     {
@@ -128,7 +194,10 @@ void Server::onConnect(ENetPeer* peer) {
     nc.peer     = peer;
     nc.playerId = net_nextPlayerId++;
 
-    ecs.addInterest(e).renderDistance = 8;
+    auto& ic = ecs.addInterest(e);
+    ic.renderDistance = 8;
+
+    chunkInterest.setRenderDistance(e, ic.renderDistance);
 
     {
         std::lock_guard<std::mutex> lock(playersMutex);
@@ -150,7 +219,12 @@ void Server::onDisconnect(ENetPeer* peer) {
     auto* nc = ecs.network(e);
     printf("[Server] Player %u disconnected.\n", nc ? nc->playerId : 0);
 
-    chunkInterest.removePlayer(e);
+    InterestDelta delta = chunkInterest.removePlayer(e);
+    for (auto& coord : delta.toUnsubscribe)
+        chunkRegistry.removeSubscriber(e, coord);
+
+    chunkRegistry.removeAllSubscriptions(e);
+
     ecs.destroy(e);
     peerToEntity.erase(it);
 }
@@ -160,12 +234,8 @@ void Server::onReceive(ENetPeer* peer, ENetPacket* packet) {
     auto type = static_cast<PacketType>(packet->data[0]);
 
     switch (type) {
-        // C_JOIN: client sends username after connect handshake.
-        // onConnect already created the entity — here we just write
-        // the username into the NetworkComp and send any loaded chunks.
         case PacketType::C_JOIN: {
             if (packet->dataLength < sizeof(PKT_C_Join)) break;
-
             PKT_C_Join pkt;
             memcpy(&pkt, packet->data, sizeof(pkt));
 
@@ -180,13 +250,12 @@ void Server::onReceive(ENetPeer* peer, ENetPacket* packet) {
             printf("[Server] Player %u joined as \"%s\"\n", nc->playerId, nc->username);
 
             // Send all currently loaded chunks to the new player
-            sendLoadedChunksToPeer(peer);
+            sendLoadedChunksToPeer(peer, it->second);
             break;
         }
 
         case PacketType::C_PLAYER_INPUT: {
             if (packet->dataLength < sizeof(PKT_C_PlayerInput)) break;
-
             PKT_C_PlayerInput pkt;
             memcpy(&pkt, packet->data, sizeof(pkt));
 
@@ -195,13 +264,48 @@ void Server::onReceive(ENetPeer* peer, ENetPacket* packet) {
             if (it == peerToEntity.end()) break;
 
             auto* pos = ecs.position(it->second);
-            auto* nc  = ecs.network(it->second);
-            if (!pos || !nc) break;
+            if (!pos) break;
 
             // TODO: validate before accepting (anti-cheat)
             pos->pos   = { pkt.x, pkt.y, pkt.z };
             pos->yaw   = pkt.yaw;
             pos->pitch = pkt.pitch;
+            break;
+        }
+
+        case PacketType::C_DEBUG_QUERY: {
+            std::lock_guard<std::mutex> lock(playersMutex);
+            auto it = peerToEntity.find(peer);
+            if (it == peerToEntity.end()) break;
+
+            PKT_S_DebugSnapshot snap;
+
+            // Registry counts
+            auto& reg = snap.registry;
+            reg.requested = reg.generating = reg.worldReady = reg.sent = 0;
+            reg.totalPendingRecipients = 0;
+
+            // ChunkRegistry exposes a stats method we add below
+            auto stats = chunkRegistry.getStats();
+            reg.requested              = stats.requested;
+            reg.generating             = stats.generating;
+            reg.worldReady             = stats.worldReady;
+            reg.sent                   = stats.sent;
+            reg.totalTracked           = stats.requested + stats.generating
+                                    + stats.worldReady + stats.sent;
+            reg.totalPendingRecipients = stats.totalPendingRecipients;
+
+            // Worker pool stats
+            auto poolStats             = workerPool->getStats();
+            snap.workerQueueDepth      = poolStats.queueDepth;
+            snap.gpuJobsInFlight       = poolStats.gpuInFlight;
+
+            snap.tickRateHz            = m_measuredTickHz;
+            snap.tickBudgetUsedPct     = (m_lastTickMs / 45.f) * 100.f;
+            snap.bytesSentThisTick     = m_bytesSentTick;
+            snap.bytesRecvThisTick     = m_bytesRecvTick;
+
+            enet_peer_send(peer, CHANNEL_RELIABLE, makePacket(snap, ENET_PACKET_FLAG_RELIABLE));
             break;
         }
 
@@ -226,30 +330,76 @@ void Server::systemPlayerPhysics(float dt) {
     }
 }
 
-void Server::systemChunkInterest(float dt) {
-    chunkInterest.update(ecs, *chunkSystem);
-    chunkSystem->update(buildPlayerSnapshots());
+void Server::systemInterestUpdate(float dt) {
+    auto deltas = chunkInterest.computeDeltas(ecs);
+
+    for (auto& delta : deltas) {
+        for (auto& coord : delta.toSubscribe)
+            chunkRegistry.request(coord, delta.playerId);
+
+        for (auto& coord : delta.toUnsubscribe)
+            chunkRegistry.removeSubscriber(delta.playerId, coord);
+    }
 }
 
-std::vector<PlayerSnapshot> Server::buildPlayerSnapshots() {
-    std::vector<PlayerSnapshot> snapshots;
-    for (auto& [id, pos] : ecs.allPositions()) {
-        snapshots.push_back({ id, pos.pos });
+void Server::systemChunkDispatch(float dt) {
+    if (serverMode == ServerMode::GPU)
+        workerPool->pollGPU();
+
+    // Drain completed chunks from workers
+    auto completed = workerPool->drainCompleted();
+    for (auto& cc : completed) {
+        world.insertChunk(cc.coord) = std::move(cc.data);
+        chunkRegistry.markWorldReady(cc.coord);
     }
-    return snapshots;
+
+    // Submit all Requested chunks to the pool
+    glm::vec3 centroid{ 0.f };
+    int playerCount = 0;
+    for (auto& [id, pos] : ecs.allPositions()) {
+        centroid += pos.pos;
+        ++playerCount;
+    }
+    if (playerCount > 0)
+        centroid /= static_cast<float>(playerCount);
+
+    ChunkCoord centerChunk{
+        static_cast<int>(std::floor(centroid.x / CHUNK_SIZE)),
+        static_cast<int>(std::floor(centroid.y / CHUNK_SIZE)),
+        static_cast<int>(std::floor(centroid.z / CHUNK_SIZE))
+    };
+
+    auto requested = chunkRegistry.collectRequested();
+    for (auto& coord : requested) {
+        int dx = coord.x - centerChunk.x;
+        int dz = coord.z - centerChunk.z;
+        int distSq = dx*dx + dz*dz;
+        workerPool->submit(coord, distSq);
+        chunkRegistry.markGenerating(coord);
+    }
 }
 
 void Server::systemNetworkFlush(float dt) {
-    for (auto& coord : chunkSystem->getAndClearReadyChunks()) {
-        auto* subscribers = chunkInterest.getSubscribers(coord);
-        if (!subscribers) continue;
+    // Chunk sends — bounded per tick to avoid saturating the link
+    constexpr int MAX_CHUNKS_PER_TICK = 16;
+    int sent = 0;
 
-        for (EntityId id : *subscribers)
-            queueChunkForPeer(id, coord);
+    auto sendWork = chunkRegistry.collectSendWork();
+    for (auto& work : sendWork) {
+        if (sent >= MAX_CHUNKS_PER_TICK) break;
+
+        for (EntityId id : work.recipients) {
+            if (sent >= MAX_CHUNKS_PER_TICK) break;
+
+            auto* nc = ecs.network(id);
+            if (!nc) continue;
+
+            sendChunkToPeer(nc->peer, work.coord);
+            chunkRegistry.markSentTo(work.coord, id);
+            ++sent;
+        }
     }
 
-    // Send a bounded number of chunks per player
-    flushChunkQueues();
     broadcastPlayerStates();
 }
 
@@ -265,23 +415,14 @@ void Server::sendChunkToPeer(ENetPeer* peer, const ChunkCoord& coord) {
     pkt.cx = coord.x;
     pkt.cy = coord.y;
     pkt.cz = coord.z;
-    memcpy(pkt.blocks, chunk->blocks.data(), BLOCKS_PER_CHUNK * sizeof(BlockType));
+    memcpy(pkt.blocks, chunk->blocks.data(), CHUNK_VOLUME * sizeof(BlockType));
 
-    ENetPacket* ep = makePacket(pkt, ENET_PACKET_FLAG_RELIABLE);
-    enet_peer_send(peer, CHANNEL_RELIABLE, ep);
+    enet_peer_send(peer, CHANNEL_RELIABLE, makePacket(pkt, ENET_PACKET_FLAG_RELIABLE));
 }
 
-void Server::sendLoadedChunksToPeer(ENetPeer* peer) {
-    auto it = peerToEntity.find(peer);
-    if (it == peerToEntity.end()) return;
-
-    EntityId id = it->second;
-    auto* pos = ecs.position(id);
-    if (!pos) return;
-
-    // Send chunks
+void Server::sendLoadedChunksToPeer(ENetPeer* peer, EntityId id) {
     for (auto& [coord, chunk] : world.chunks)
-        queueChunkForPeer(id, coord);
+        chunkRegistry.request(coord, id);
 }
 
 void Server::broadcastPlayerStates() {
@@ -307,36 +448,5 @@ void Server::broadcastPlayerStates() {
     for (auto& [peer, entityId] : peerToEntity) {
         ENetPacket* ep = makePacket(pkt, 0);
         enet_peer_send(peer, CHANNEL_UNRELIABLE, ep);
-    }
-}
-
-// -- Chunk steaming --
-void Server::queueChunkForPeer(EntityId id, const ChunkCoord& coord) {
-    auto* nc = ecs.network(id);
-    if (!nc) return;
-
-    // Already queued
-    if (nc->queuedChunkSends.count(coord)) return;
-
-    nc->pendingChunkSends.push_back(coord);
-    nc->queuedChunkSends.insert(coord);
-}
-
-void Server::flushChunkQueues() {
-    constexpr int CHUNKS_PER_TICK = 16;
-    for (auto& [id, net] : ecs.allNetworks()) {
-        int budget = CHUNKS_PER_TICK;
-
-        while (budget-- > 0 && !net.pendingChunkSends.empty()) {
-            ChunkCoord coord =
-                net.pendingChunkSends.front();
-
-            net.pendingChunkSends.pop_front();
-            net.queuedChunkSends.erase(coord);
-
-            sendChunkToPeer(net.peer, coord);
-
-            chunkInterest.markSent(id, coord);
-        }
     }
 }

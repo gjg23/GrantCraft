@@ -5,47 +5,50 @@
 
 #include "world/chunk.hpp"
 #include "ecs/registry.hpp"
-#include "generation/chunk_system.hpp"
 
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <climits>
 
-// Per-player chunk subscription state.
-// Tracks what a player currently has loaded and computes
-// load/unload deltas as they move.
+using EntityId = uint32_t;
+
+// Per-player chunk subscription state
 struct PlayerInterestState {
-    ChunkCoord lastChunk = {INT_MAX, INT_MAX, INT_MAX};
+    ChunkCoord lastChunk = { INT_MAX, INT_MAX, INT_MAX };
+    int renderDistance = 8;
+ 
+    // The set of chunk coords this player is currently subscribed to
+    std::unordered_set<ChunkCoord, ChunkCoordHash> subscribedChunks;
+};
 
-    std::unordered_set<ChunkCoord, ChunkCoordHash> requestedChunks;
-    std::unordered_set<ChunkCoord, ChunkCoordHash> loadedChunks;
-
-    int renderDistance = 6;
+// Result of one player's delta computation this tick
+struct InterestDelta {
+    EntityId                playerId;
+    std::vector<ChunkCoord> toSubscribe;    // newly entered render distance
+    std::vector<ChunkCoord> toUnsubscribe;  // left render distance
 };
 
 class ChunkInterestSystem {
 public:
-    // Called by server tick
-    // computes deltas and submits to ChunkSystem
-    void update(Registry& ecs, ChunkSystem& chunkSystem);
-
-    // Mark a chunk as delivered to a player
-    void markSent(EntityId id, const ChunkCoord& coord);
-
-    // Remove player state on disconnect
-    void removePlayer(EntityId id);
-
-    const std::unordered_set<EntityId>* getSubscribers(const ChunkCoord& coord) const;
-
+    // Returns one InterestDelta per player that actually moved
+    std::vector<InterestDelta> computeDeltas(Registry& ecs);
+ 
+    // Called by the server when a player disconnects
+    InterestDelta removePlayer(EntityId id);
+ 
+    void setRenderDistance(EntityId id, int renderDistance);
+ 
 private:
     std::unordered_map<EntityId, PlayerInterestState> playerStates;
-
-    std::unordered_map<ChunkCoord, std::unordered_set<EntityId>, ChunkCoordHash> chunkSubscribers;
-
-    ChunkCoord toChunkCoord(const glm::vec3& pos);
-    void computeDelta(EntityId id,
-                      PlayerInterestState& state,
-                      const ChunkCoord& newCenter,
-                      std::vector<ChunkCoord>& toLoad,
-                      std::vector<ChunkCoord>& toUnload);
+ 
+    static ChunkCoord toChunkCoord(const glm::vec3& pos);
+ 
+    // Fills toSubscribe / toUnsubscribe by diffing old vs new set
+    static void computeDelta(
+        PlayerInterestState&     state,
+        const ChunkCoord&        newCenter,
+        std::vector<ChunkCoord>& toSubscribe,
+        std::vector<ChunkCoord>& toUnsubscribe
+    );
 };

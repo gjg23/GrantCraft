@@ -32,8 +32,9 @@ target_link_libraries(cpu_terrain PUBLIC
 
 # ----- Chunk System -----
 add_library(chunk_core STATIC
-    src/generation/chunk_system.cpp
+    src/generation/chunk_worker_pool.cpp
     src/generation/chunk_interest.cpp
+    src/generation/chunk_registry.cpp
 )
 target_include_directories(chunk_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

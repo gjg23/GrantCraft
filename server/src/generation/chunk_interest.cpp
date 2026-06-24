@@ -9,124 +9,81 @@ ChunkCoord ChunkInterestSystem::toChunkCoord(const glm::vec3& pos) {
              (int)std::floor(pos.z / CHUNK_SIZE) };
 }
 
-// Build a 2D square of the needed chunks centered on the player
-void ChunkInterestSystem::computeDelta(EntityId id,
-                                       PlayerInterestState& state,
-                                       const ChunkCoord& newCenter,
-                                       std::vector<ChunkCoord>& toLoad,
-                                       std::vector<ChunkCoord>& toUnload) {
+// Build a 3D cube of the needed chunks centered on the player
+void ChunkInterestSystem::computeDelta(
+    PlayerInterestState&     state,
+    const ChunkCoord&        newCenter,
+    std::vector<ChunkCoord>& toSubscribe,
+    std::vector<ChunkCoord>& toUnsubscribe)
+{
     const int r = state.renderDistance;
-
-    // Build the set of chunks the player should have at new position
+ 
     std::unordered_set<ChunkCoord, ChunkCoordHash> needed;
+    needed.reserve((2*r+1) * (2*r+1) * (2*r+1));
+ 
     for (int dx = -r; dx <= r; ++dx)
     for (int dy = -r; dy <= r; ++dy)
     for (int dz = -r; dz <= r; ++dz) {
-        ChunkCoord coord{ newCenter.x + dx, newCenter.y + dy, newCenter.z + dz };
-        
-        // Never queue below 0
-        if (coord.y < 0) continue;
-        
-        needed.insert(coord);
+        ChunkCoord c{ newCenter.x + dx, newCenter.y + dy, newCenter.z + dz };
+        if (c.y < 0) continue;      // never generate below bedrock
+        needed.insert(c);
     }
-
-    // Chunks in
+ 
+    // Newly visible
     for (auto& coord : needed)
-        if (!state.requestedChunks.count(coord))
-            toLoad.push_back(coord);
-
-    // Chunks out
-    for (auto& coord : state.requestedChunks)
+        if (!state.subscribedChunks.count(coord))
+            toSubscribe.push_back(coord);
+ 
+    // No longer visible
+    for (auto& coord : state.subscribedChunks)
         if (!needed.count(coord))
-            toUnload.push_back(coord);
+            toUnsubscribe.push_back(coord);
+ 
+    // Apply new set
+    state.subscribedChunks = std::move(needed);
 }
 
-// Update loop called in server.cpp to enqueue needed chunks
-void ChunkInterestSystem::update(Registry& ecs, ChunkSystem& chunkSystem) {
-    // Build centers from all known player positions for priority scoring
-    std::vector<ChunkCoord> centers;
-    centers.reserve(playerStates.size());
-    for (auto& [id, state] : playerStates) {
-        if (state.lastChunk.x != INT_MAX)  // skip uninitialized
-            centers.push_back(state.lastChunk);
-    }
-    
-    // loop through all player entities
+std::vector<InterestDelta> ChunkInterestSystem::computeDeltas(Registry& ecs) {
+    std::vector<InterestDelta> results;
+ 
     for (auto& [id, pos] : ecs.allPositions()) {
         ChunkCoord center = toChunkCoord(pos.pos);
-
+ 
         // Lazily create state for new players
         auto& state = playerStates[id];
-
-        // Only recompute delta if the player moved to a new chunk
+ 
+        // Skip players that haven't crossed a chunk boundary
         if (center == state.lastChunk) continue;
-        
-        // get chunks in and out
-        std::vector<ChunkCoord> toLoad;
-        std::vector<ChunkCoord> toUnload;
-        computeDelta(id, state, center, toLoad, toUnload);
-
-        // Submit new chunk interest
-        for (auto& coord : toLoad) {
-            state.requestedChunks.insert(coord);
-            chunkSubscribers[coord].insert(id);
-            chunkSystem.enqueueIfNeeded(coord, centers);
-        }
-
-        // Remove old interest
-        for (auto& coord : toUnload) {
-            state.requestedChunks.erase(coord);
-            state.loadedChunks.erase(coord);
-
-            auto it = chunkSubscribers.find(coord);
-
-            if (it != chunkSubscribers.end())
-            {
-                it->second.erase(id);
-                if (it->second.empty())
-                    chunkSubscribers.erase(it);
-            }
-        }
-
+ 
+        InterestDelta delta;
+        delta.playerId = id;
+ 
+        computeDelta(state, center, delta.toSubscribe, delta.toUnsubscribe);
+ 
         state.lastChunk = center;
+ 
+        if (!delta.toSubscribe.empty() || !delta.toUnsubscribe.empty())
+            results.push_back(std::move(delta));
     }
+ 
+    return results;
 }
 
-// Reverse lookup
-const std::unordered_set<EntityId>*
-ChunkInterestSystem::getSubscribers(const ChunkCoord& coord) const {
-    auto it = chunkSubscribers.find(coord);
-
-    if (it == chunkSubscribers.end())
-        return nullptr;
-
-    return &it->second;
-}
-
-// Mark chunk as sent to the player
-void ChunkInterestSystem::markSent(EntityId id, const ChunkCoord& coord) {
+InterestDelta ChunkInterestSystem::removePlayer(EntityId id) {
+    InterestDelta delta;
+    delta.playerId = id;
+ 
     auto it = playerStates.find(id);
-    if (it == playerStates.end())
-        return;
-
-    it->second.loadedChunks.insert(coord);
-}
-
-// Remove player from player states
-void ChunkInterestSystem::removePlayer(EntityId id) {
-    auto it = playerStates.find(id);
-    if (it == playerStates.end()) return;
-
-    for (const auto& coord : it->second.requestedChunks) {
-        auto subIt = chunkSubscribers.find(coord);
-
-        if (subIt == chunkSubscribers.end()) continue;
-
-        subIt->second.erase(id);
-
-        if (subIt->second.empty())
-            chunkSubscribers.erase(subIt);
+    if (it != playerStates.end()) {
+        // Return everything they were subscribed to as unsubscribes
+        for (auto& coord : it->second.subscribedChunks)
+            delta.toUnsubscribe.push_back(coord);
+        playerStates.erase(it);
     }
 
-    playerStates.erase(it);
+    return delta;
+}
+
+void ChunkInterestSystem::setRenderDistance(EntityId id, int renderDistance) {
+    playerStates[id].renderDistance = renderDistance;
 }

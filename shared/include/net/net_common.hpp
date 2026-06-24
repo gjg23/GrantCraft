@@ -9,9 +9,6 @@
 #include <world/chunk.hpp>
 #include "world/shared_player_state.hpp"
 
-// how many blocks in one chunk column
-constexpr int BLOCKS_PER_CHUNK = CHUNK_SIZE* CHUNK_SIZE * CHUNK_SIZE;
-
 // ----- ENet Chanel layout -----
 // Channel 0 = reliable ordered (login, spawn, world data)
 // Chanel 1  = unreliable       (player pos)
@@ -30,6 +27,10 @@ enum class PacketType : uint8_t {
     // Client -> Server
     C_JOIN          = 10,  // client introduces itself with a name
     C_PLAYER_INPUT  = 11,  // client sends its input / desired position each tick
+
+    // Debug
+    C_DEBUG_QUERY       = 20,
+    S_DEBUG_SNAPSHOT    = 21,
 };
 
 
@@ -72,8 +73,8 @@ struct PKT_S_PlayerState {
 struct PKT_S_ChunkData {
     PacketType type = PacketType::S_CHUNK_DATA;
     int32_t    cx, cy, cz;                    // chunk coordinate
-    uint32_t   blockCount = BLOCKS_PER_CHUNK;
-    BlockType  blocks[BLOCKS_PER_CHUNK];
+    uint32_t   blockCount = CHUNK_VOLUME;
+    BlockType  blocks[CHUNK_VOLUME];
 };
 
 

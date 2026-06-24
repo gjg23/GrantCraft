@@ -51,6 +51,8 @@ target_link_libraries(game_core PRIVATE
 add_library(client_core
     src/client_core/client.cpp
     src/client_core/local_server.cpp
+    src/bench/bench_mode.cpp
+    src/bench/debug_mode.cpp
 )
 target_include_directories(client_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

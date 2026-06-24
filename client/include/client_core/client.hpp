@@ -1,6 +1,6 @@
 #pragma once
 // ------------------------------------------------------------------
-// client.h
+// client.hpp
 // Manages the client side of the network connection.
 // Responsibilities:
 //   - Connect to a server (local or remote)
@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include "net/net_common.hpp"
+#include "net/debug_packets.hpp"
 #include "game_core/remote_player.hpp"
 #include "world/chunk.hpp"
 
@@ -64,6 +65,14 @@ public:
         return out;
     }
 
+    // ---- debug stats ----
+    // Send a debug query packet to the server
+    void sendDebugQuery();
+
+    // Check the latest debug snapshot
+    bool                  hasPendingDebugSnapshot() const;
+    PKT_S_DebugSnapshot   popDebugSnapshot();
+
 private:
     ENetHost* m_host      = nullptr;
     ENetPeer* m_peer      = nullptr;
@@ -76,4 +85,8 @@ private:
     std::unordered_map<uint32_t, RemotePlayer> m_remotePlayers;
 
     void onReceive(ENetPacket* packet);
+
+    // ---- debug stats ----
+    bool                m_hasDebugSnapshot = false;
+    PKT_S_DebugSnapshot m_debugSnapshot{};
 };

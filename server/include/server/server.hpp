@@ -24,24 +24,23 @@
 
 #include "net/net_common.hpp"
 #include "ecs/registry.hpp"
-#include "generation/chunk_system.hpp"
-#include "scheduler/scheduler.hpp"
-#include "scheduler/fifo_sched.hpp"
-#include "world/world_state.hpp"
+
+#include "generation/chunk_registry.hpp"
+#include "generation/chunk_worker_pool.hpp"
 #include "generation/chunk_interest.hpp"
 
-enum class ServerMode {
-    CPU,
-    GPU
-};
+#include "scheduler/scheduler.hpp"
+#include "scheduler/fifo_sched.hpp"
+
+#include "world/world_state.hpp"
+
+enum class ServerMode { CPU, GPU };
 
 class Server {
 public:
     bool init(uint16_t port, ServerMode mode = ServerMode::CPU);   // start listening on the given port
     void tick(float dt);        // Single tick for client management
     void shutdown();            // shutdown server
-
-    // Check if server is active
     bool isRunning() const { return net_running; }
 
 private:
@@ -53,10 +52,6 @@ private:
     ENetHost* net_host          = nullptr;
     bool      net_running       = false;
     uint32_t  net_nextPlayerId  = 1;
-
-    // Chunk steaming
-    void queueChunkForPeer( EntityId id, const ChunkCoord& coord); 
-    void flushChunkQueues();
 
     // Internal packet handlers
     void onConnect   (ENetPeer* peer);
@@ -71,31 +66,44 @@ private:
     // map from network layer to ECS
     std::unordered_map<ENetPeer*, EntityId> peerToEntity;
     std::mutex playersMutex;
-    std::vector<PlayerSnapshot> buildPlayerSnapshots();
 
     // =========================================================
     // World + chunk pipeline
     // =========================================================
-    WorldState                   world;
-    std::unique_ptr<ChunkSystem> chunkSystem;
+    WorldState world;
+
+    // =========================================================
+    // Chunk pipeline
+    // =========================================================
+    // main thread
+    ChunkRegistry                    chunkRegistry;
+    std::unique_ptr<ChunkWorkerPool> workerPool;
+    ChunkInterestSystem              chunkInterest;
+    void generate_spawn_chunks();
 
     // =========================================================
     // Scheduler
     // =========================================================
-    // Swap FifoScheduler for StaticPriorityScheduler or
-    // AdaptiveScheduler here when you're ready — nothing else changes.
     std::unique_ptr<IScheduler> scheduler;
 
     // =========================================================
     // Systems (called by tick via scheduler)
     // =========================================================
-    ChunkInterestSystem chunkInterest;
-    void systemPlayerPhysics (float dt);   // integrate velocity, apply gravity
-    void systemChunkInterest (float dt);   // enqueue chunks players need
-    void systemNetworkFlush  (float dt);   // broadcast player states + ready chunks
+    void systemPlayerPhysics (float dt);    // integrate velocity, apply gravity
+    void systemInterestUpdate(float dt);    // enqueue chunks players need
+    void systemChunkDispatch (float dt);    // registry + worker pool
+    void systemNetworkFlush  (float dt);    // broadcast player states + ready chunks
 
     // Outbound packet helpers
     void sendChunkToPeer        (ENetPeer* peer, const ChunkCoord& coord);
-    void sendLoadedChunksToPeer (ENetPeer* peer);
+    void sendLoadedChunksToPeer(ENetPeer* peer, EntityId id);
     void broadcastPlayerStates  ();
+
+    // Debug stats
+    uint32_t m_tickCount       = 0;
+    uint32_t m_measuredTickHz  = 0;
+    float    m_lastTickMs      = 0.f;
+    std::chrono::steady_clock::time_point m_tickRateTimer;
+    uint32_t m_bytesSentTick   = 0;
+    uint32_t m_bytesRecvTick   = 0;
 };
