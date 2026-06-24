@@ -35,13 +35,6 @@ public:
     auto& allPositions() { return positions; }
     auto& allNetworks()  { return networks; }
 
-    // Reverse lookup: peer → entity (for onReceive / onDisconnect)
-    EntityId findByPeer(ENetPeer* peer) {
-        for (auto& [id, nc] : networks)
-            if (nc.peer == peer) return id;
-        return NULL_ENTITY;
-    }
-
 private:
     EntityId nextId = 0;
     std::unordered_map<EntityId, PositionComp>      positions;

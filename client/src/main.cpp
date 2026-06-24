@@ -35,14 +35,31 @@
 int main(int argc, char* argv[]) {
     // ------------------------------------------------------------------
     // Determine mode from arguments
-    // ./game_client                        # singleplayer  (argc == 1)
-    // ./game_client 192.168.1.5 25565      # multiplayer   (argc == 3)
+    // ./game_client                            # singleplayer CPU
+    // ./game_client --gpu                      # singleplayer GPU
+    // ./game_client 192.168.1.5 25565          # multiplayer CPU
+    // ./game_client 192.168.1.5 25565 --gpu    # multiplayer GPU
     // ------------------------------------------------------------------
-    bool        singleplayer = (argc < 3);
-    const char* remoteHost = singleplayer ? "127.0.0.1" : argv[1];
-    uint16_t    remotePort = singleplayer ? 7778        : static_cast<uint16_t>(atoi(argv[2]));
-    if (argc != 1 && argc != 3) {
-        fprintf(stderr, "Usage: %s [host addr] [host port]\n", argv[0]);
+    ServerMode mode = ServerMode::CPU;
+    int filteredArgc = 0;
+    char* filteredArgv[8] = {};
+    filteredArgv[filteredArgc++] = argv[0];
+
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--gpu") == 0)
+            mode = ServerMode::GPU;
+        else if (strcmp(argv[i], "--cpu") == 0)
+            mode = ServerMode::CPU;
+        else
+            filteredArgv[filteredArgc++] = argv[i];
+    }
+
+    bool        singleplayer = (filteredArgc < 3);
+    const char* remoteHost   = singleplayer ? "127.0.0.1" : filteredArgv[1];
+    uint16_t    remotePort   = singleplayer ? 7778        : static_cast<uint16_t>(atoi(filteredArgv[2]));
+
+    if (filteredArgc != 1 && filteredArgc != 3) {
+        fprintf(stderr, "Usage: %s [host] [port] [--gpu|--cpu]\n", argv[0]);
         return 1;
     }
 
@@ -60,7 +77,7 @@ int main(int argc, char* argv[]) {
     LocalServer localServer;
     if (singleplayer) {
         printf("Starting local server.\n");
-        if (!localServer.start(remotePort)) {
+        if (!localServer.start(remotePort, mode)) {
             enet_deinitialize();
             fprintf(stderr, "Staring local server failed.\n");
             exit(EXIT_FAILURE);
@@ -110,8 +127,8 @@ int main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
     Renderer renderer;
-    renderer.init(skyShader, blockShader, loadTexture("textures/atlas_2.png"));
     DayNightCycle dayNight;
+    renderer.init(skyShader, blockShader, loadTexture("textures/atlas_2.png"));
 
     // ------------------------------------------------------------------
     // Connect to the server (local or remote)
@@ -150,12 +167,13 @@ int main(int argc, char* argv[]) {
 
         // Pump incoming packets — updates client.getRemotePlayers()
         client.tick();
-
-        for (auto& coord : client.getAndClearNewChunks()) {
+        for (const auto& coord : client.getAndClearNewChunks()) {
             const auto& chunks = client.getChunks();
             auto it = chunks.find(coord);
-            if (it != chunks.end())
-                renderer.submitChunk(coord, it->second);
+            if (it != chunks.end()) {
+                // Pass a copy of the block data; renderer owns it from here
+                renderer.submitChunk(coord, it->second.blocks);
+            }
         }
 
         // Render
@@ -168,7 +186,7 @@ int main(int argc, char* argv[]) {
 
         renderer.beginFrame();
         renderer.renderSky(ctx, localPlayer.cam.position);  // needs cam.position exposed
-        renderer.renderWorld(ctx, ctx.view, ctx.proj);
+        renderer.renderWorld(ctx);
 
         // Remote players still use drawCube
         for (auto& [id, rp] : client.getRemotePlayers())
@@ -180,13 +198,9 @@ int main(int argc, char* argv[]) {
     // ------------------------------------------------------------------
     // Cleanup in reverse init order
     // ------------------------------------------------------------------
-    // renderer.cleanup();
+    renderer.cleanup();
     client.disconnect();
-
-    if (singleplayer) {
-        localServer.stop();
-    }
-
+    if (singleplayer) localServer.stop();
     win.destroy();
     enet_deinitialize();
     return 0;

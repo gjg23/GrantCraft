@@ -1,7 +1,7 @@
 #pragma once
 // generation/terrain_detail.hpp
 
-#include "world/biome_rules.hpp"
+#include "generation/device_shared/biome_rules.hpp"
 #include "world/chunk.hpp"
 #include "settings/settings.hpp"
 

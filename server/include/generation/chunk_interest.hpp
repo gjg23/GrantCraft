@@ -2,9 +2,12 @@
 // ==========================================================
 // server/include/generation/chunk_interest.hpp
 // ==========================================================
+
 #include "world/chunk.hpp"
 #include "ecs/registry.hpp"
 #include "generation/chunk_system.hpp"
+
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -13,8 +16,11 @@
 // load/unload deltas as they move.
 struct PlayerInterestState {
     ChunkCoord lastChunk = {INT_MAX, INT_MAX, INT_MAX};
-    std::unordered_set<ChunkCoord, ChunkCoordHash> loadedChunks; // sent to this player
-    int renderDistance = 8;
+
+    std::unordered_set<ChunkCoord, ChunkCoordHash> requestedChunks;
+    std::unordered_set<ChunkCoord, ChunkCoordHash> loadedChunks;
+
+    int renderDistance = 6;
 };
 
 class ChunkInterestSystem {
@@ -23,18 +29,18 @@ public:
     // computes deltas and submits to ChunkSystem
     void update(Registry& ecs, ChunkSystem& chunkSystem);
 
-    // Called by networkFlush to check which ready chunks to send to whom
-    // Returns peers that need a specific coord
-    std::vector<EntityId> getPeersNeedingChunk(const ChunkCoord& coord);
-
     // Mark a chunk as delivered to a player
     void markSent(EntityId id, const ChunkCoord& coord);
 
     // Remove player state on disconnect
     void removePlayer(EntityId id);
 
+    const std::unordered_set<EntityId>* getSubscribers(const ChunkCoord& coord) const;
+
 private:
     std::unordered_map<EntityId, PlayerInterestState> playerStates;
+
+    std::unordered_map<ChunkCoord, std::unordered_set<EntityId>, ChunkCoordHash> chunkSubscribers;
 
     ChunkCoord toChunkCoord(const glm::vec3& pos);
     void computeDelta(EntityId id,

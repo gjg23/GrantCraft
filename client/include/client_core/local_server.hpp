@@ -17,7 +17,7 @@
 class LocalServer {
 public:
     // Start the server on a background thread
-    bool start(uint16_t port = 7778);
+    bool start(uint16_t port = 7778, ServerMode mode = ServerMode::CPU);
 
     // Signal the server to stop and join the thread
     void stop();

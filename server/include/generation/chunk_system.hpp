@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <vector>
+#include <cuda_runtime.h>
 #include <glm/glm.hpp>
 
 #include "world/world_state.hpp"
@@ -30,9 +31,18 @@ enum class ChunkState {
     Ready,
 };
 
+// --- GPU Structs ---
+// device backend
 enum class GenBackend {
     CPU,
-    GPU,  // boilerplate for now - currently no gpu support
+    GPU,
+};
+
+// GPU job tracking
+struct GPUJob {
+    ChunkCoord coord;
+    BlockType* blocks = nullptr;
+    cudaStream_t stream;
 };
 
 struct ChunkRuntime {
@@ -59,7 +69,10 @@ private:
     // World data to broadcast
     WorldState& world;
     // GPU or CPU device
-    GenBackend  backend;
+    GenBackend backend;
+    // GPU jobs
+    std::vector<GPUJob> gpuJobs;
+    std::mutex gpuJobsMutex;
 
     // Chunk pipeline map
     std::unordered_map<ChunkCoord, ChunkRuntime, ChunkCoordHash> runtime;
@@ -102,6 +115,7 @@ private:
     void enqueueNeededChunks(const ChunkCoord& center); // multiple
     void workerLoop();
     void generateChunk(const ChunkCoord& coord);
+    void pollGPU();
 
     // Helper to get world cord to chunk coord
     ChunkCoord worldToChunk(const glm::vec3& pos);

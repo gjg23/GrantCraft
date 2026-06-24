@@ -5,6 +5,8 @@ add_library(renderer
     src/render/chunk_mesh.cpp
     src/render/shader.cpp
     src/render/texture.cpp
+    src/render/chunk_mesher.cpp
+    src/render/chunk_renderer.cpp
 )
 target_include_directories(renderer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

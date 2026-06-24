@@ -156,24 +156,25 @@ void Renderer::renderSky(const RenderContext& ctx, const glm::vec3& camPos) {
     glDepthMask(GL_TRUE);
 }
 
-void Renderer::renderWorld(const RenderContext& ctx,
-                           const glm::mat4& view,
-                           const glm::mat4& proj) {
+void Renderer::renderWorld(const RenderContext& ctx) {
     glUseProgram(m_blockShader);
-
+ 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_atlasTex);
-
-    glm::mat4 model(1.0f);
+ 
+    // Upload per-frame lighting uniforms
     glUniform3fv(m_blockLocs.sunDir,       1, glm::value_ptr(ctx.sunDir));
     glUniform3fv(m_blockLocs.sunColor,     1, glm::value_ptr(ctx.sunColor));
     glUniform3fv(m_blockLocs.ambientColor, 1, glm::value_ptr(ctx.ambientColor));
+ 
+    // Identity model
+    glm::mat4 model(1.0f);
     glUniformMatrix4fv(m_blockLocs.model, 1, GL_FALSE, glm::value_ptr(model));
-    glUniformMatrix4fv(m_blockLocs.view,  1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(m_blockLocs.proj,  1, GL_FALSE, glm::value_ptr(proj));
-
-    for (auto& [coord, mesh] : m_meshes)
-        mesh.draw();
+    glUniformMatrix4fv(m_blockLocs.view,  1, GL_FALSE, glm::value_ptr(ctx.view));
+    glUniformMatrix4fv(m_blockLocs.proj,  1, GL_FALSE, glm::value_ptr(ctx.proj));
+ 
+    // Delegate frustum cull + draw to ChunkRenderer
+    m_chunkRenderer.render(ctx.proj, ctx.view);
 }
 
 void Renderer::drawCube(const glm::mat4& view,
@@ -192,8 +193,12 @@ void Renderer::drawCube(const glm::mat4& view,
     glBindVertexArray(0);
 }
 
-void Renderer::submitChunk(const ChunkCoord& coord, const Chunk& chunk) {
-    m_meshes[coord].build(chunk);
+void Renderer::submitChunk(const ChunkCoord& coord, std::vector<BlockType> blocks) {
+    m_chunkRenderer.onChunkReceived(coord, std::move(blocks));
+}
+
+void Renderer::removeChunk(const ChunkCoord& coord) {
+    m_chunkRenderer.onChunkRemoved(coord);
 }
 
 void Renderer::cleanup() {

@@ -1,7 +1,8 @@
 #pragma once
 // =============================================================
-// config.hpp
+// settings.hpp
 // =============================================================
+#define TERRAIN_SETTINGS_HPP
 
 #include <cstdint>
 
@@ -13,7 +14,7 @@ namespace Game {
     static constexpr int   PLAYER_MAX_HEALTH    = 20;
 }
 
-namespace Terrain {
+namespace TerrainSettings {
     // Continent
     static inline float CONTINENT_SCALE     = 0.0008f;
     static inline float HEIGHT_LACUNARITY   = 2.0f;
@@ -37,9 +38,6 @@ namespace Terrain {
 
     // Water
     static inline int   WATER_LEVEL         = 62;
-
-    // World
-    static inline int   WORLD_HEIGHT_CHUNKS = 16;
 
     // Caves
     static inline float CAVE_BASE_FREQ      = 0.04f;

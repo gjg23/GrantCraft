@@ -6,8 +6,8 @@
 #include <thread>
 #include <enet/enet.h>
 
-bool LocalServer::start(uint16_t port) {
-    if (!m_server.init(port)) {
+bool LocalServer::start(uint16_t port, ServerMode mode) {
+    if (!m_server.init(port, mode)) {
         fprintf(stderr, "[LocalServer] Failed to start on port %u\n", port);
         return false;
     }

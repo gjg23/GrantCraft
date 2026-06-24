@@ -1,34 +1,36 @@
 // biome_rules.hpp
 #pragma once
-
 #include "world/block.hpp"
-#include "world/terrain_params.hpp"
-#include "device/host_device.hpp"
-
+#include "generation/device_shared/host_device.hpp"
 #include <math.h>
 
+// biomes
+enum class Biome : uint8_t {
+    Desert      = 0,  // hot   + dry
+    Savannah    = 1,  // hot   + mild
+    Jungle      = 2,  // hot   + wet
+    Rocky       = 3,  // warm  + dry
+    Plains      = 4,  // warm  + mild
+    Forest      = 5,  // warm  + wet
+    SnowDesert  = 6,  // cold  + dry
+    SnowyPlains = 7,  // cold  + mild
+    SnowyForest = 8,  // cold  + wet
+};
+
 // --- Biome lookup table on the device ---
-// Temperature: 0=cold, 1=warm, 2=hot   (rows)
-// Humidity:    0=dry,  1=mild, 2=wet   (cols)
-#ifdef __CUDACC__
-    static __device__ __constant__ Biome kBiomeTable[3][3] = {
-        { Biome::SnowDesert, Biome::SnowyPlains, Biome::SnowyForest }, // cold
-        { Biome::Rocky,      Biome::Plains,      Biome::Forest      }, // warm
-        { Biome::Desert,     Biome::Savannah,    Biome::Jungle      }, // hot
-    };
-#else
-    static const Biome kBiomeTable[3][3] = {
-        { Biome::SnowDesert, Biome::SnowyPlains, Biome::SnowyForest }, // cold
-        { Biome::Rocky,      Biome::Plains,      Biome::Forest      }, // warm
-        { Biome::Desert,     Biome::Savannah,    Biome::Jungle      }, // hot
-    };
-#endif
+HD FINLINE Biome biomeLookup(int t, int h) {
+    constexpr Biome table[3][3] = {
+        { Biome::SnowDesert, Biome::SnowyPlains, Biome::SnowyForest },
+        { Biome::Rocky,      Biome::Plains,      Biome::Forest      },
+        { Biome::Desert,     Biome::Savannah,    Biome::Jungle      }};
+    return table[t][h];
+}
 
 // Returns biome from continuous temperature [0,1] and humidity [0,1]
 HD FINLINE Biome classifyBiome(float temperature, float humidity) {
-    int ti = (int)fminf(floorf(temperature * 3.0f), 2.0f); // 0,1,2
-    int hi = (int)fminf(floorf(humidity    * 3.0f), 2.0f);
-    return kBiomeTable[ti][hi];
+    int ti = (int)fminf(floorf(temperature * 3.0f), 2.0f);
+    int hi = (int)fminf(floorf(humidity * 3.0f), 2.0f);
+    return biomeLookup(ti, hi);
 }
 
 // Per-biome surface/subsurface block selection.

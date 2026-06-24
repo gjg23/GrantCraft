@@ -5,6 +5,8 @@
 #include "server/server.hpp"
 #include "scheduler/fifo_sched.hpp"
 #include "ecs/components.hpp"
+#include "generation/gpu_terrain/kernel.cuh"
+
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -13,7 +15,9 @@
 // ------------------------------------------------------------------
 // Start server
 // ------------------------------------------------------------------
-bool Server::init(uint16_t port) {
+bool Server::init(uint16_t port, ServerMode mode) {
+    
+    
     ENetAddress address;
     address.host = ENET_HOST_ANY;
     address.port = port;
@@ -24,8 +28,13 @@ bool Server::init(uint16_t port) {
         return false;
     }
 
+    serverMode = mode;
+    if (serverMode == ServerMode::GPU)
+        uploadTerrainParams(makeTerrainParams());
+
     scheduler   = std::make_unique<FifoScheduler>();
-    chunkSystem = std::make_unique<ChunkSystem>(world);
+    GenBackend backend = (serverMode == ServerMode::GPU) ? GenBackend::GPU : GenBackend::CPU;
+    chunkSystem = std::make_unique<ChunkSystem>(world, backend);
     chunkSystem->init();
     chunkSystem->waitForSpawnChunks(2);
 
@@ -218,20 +227,29 @@ void Server::systemPlayerPhysics(float dt) {
 }
 
 void Server::systemChunkInterest(float dt) {
-    // Computes per-player deltas and enqueues only what's new
     chunkInterest.update(ecs, *chunkSystem);
+    chunkSystem->update(buildPlayerSnapshots());
+}
+
+std::vector<PlayerSnapshot> Server::buildPlayerSnapshots() {
+    std::vector<PlayerSnapshot> snapshots;
+    for (auto& [id, pos] : ecs.allPositions()) {
+        snapshots.push_back({ id, pos.pos });
+    }
+    return snapshots;
 }
 
 void Server::systemNetworkFlush(float dt) {
-    // Deliver any chunks that finished generating to players who need them
     for (auto& coord : chunkSystem->getAndClearReadyChunks()) {
-        for (EntityId id : chunkInterest.getPeersNeedingChunk(coord)) {
-            auto* nc = ecs.network(id);
-            if (nc) sendChunkToPeer(nc->peer, coord);
-            chunkInterest.markSent(id, coord);
-        }
+        auto* subscribers = chunkInterest.getSubscribers(coord);
+        if (!subscribers) continue;
+
+        for (EntityId id : *subscribers)
+            queueChunkForPeer(id, coord);
     }
 
+    // Send a bounded number of chunks per player
+    flushChunkQueues();
     broadcastPlayerStates();
 }
 
@@ -261,16 +279,9 @@ void Server::sendLoadedChunksToPeer(ENetPeer* peer) {
     auto* pos = ecs.position(id);
     if (!pos) return;
 
-    // Mark all ready chunks as sent via ChunkInterestSystem
-    // so it doesn't try to re-send them through systemNetworkFlush
-    int sent = 0;
-    for (auto& [coord, chunk] : world.chunks) {
-        sendChunkToPeer(peer, coord);
-        chunkInterest.markSent(id, coord);
-        sent++;
-    }
-    printf("[Server] Sent %d existing chunks to player %u on join\n",
-           sent, ecs.network(id) ? ecs.network(id)->playerId : 0);
+    // Send chunks
+    for (auto& [coord, chunk] : world.chunks)
+        queueChunkForPeer(id, coord);
 }
 
 void Server::broadcastPlayerStates() {
@@ -293,8 +304,39 @@ void Server::broadcastPlayerStates() {
 
     if (pkt.playerCount == 0) return;
 
-    ENetPacket* ep = makePacket(pkt, 0); // unreliable — drop is fine
-    std::lock_guard<std::mutex> lk(playersMutex);
-    for (auto& [peer, entityId] : peerToEntity)
+    for (auto& [peer, entityId] : peerToEntity) {
+        ENetPacket* ep = makePacket(pkt, 0);
         enet_peer_send(peer, CHANNEL_UNRELIABLE, ep);
+    }
+}
+
+// -- Chunk steaming --
+void Server::queueChunkForPeer(EntityId id, const ChunkCoord& coord) {
+    auto* nc = ecs.network(id);
+    if (!nc) return;
+
+    // Already queued
+    if (nc->queuedChunkSends.count(coord)) return;
+
+    nc->pendingChunkSends.push_back(coord);
+    nc->queuedChunkSends.insert(coord);
+}
+
+void Server::flushChunkQueues() {
+    constexpr int CHUNKS_PER_TICK = 16;
+    for (auto& [id, net] : ecs.allNetworks()) {
+        int budget = CHUNKS_PER_TICK;
+
+        while (budget-- > 0 && !net.pendingChunkSends.empty()) {
+            ChunkCoord coord =
+                net.pendingChunkSends.front();
+
+            net.pendingChunkSends.pop_front();
+            net.queuedChunkSends.erase(coord);
+
+            sendChunkToPeer(net.peer, coord);
+
+            chunkInterest.markSent(id, coord);
+        }
+    }
 }

@@ -30,9 +30,14 @@
 #include "world/world_state.hpp"
 #include "generation/chunk_interest.hpp"
 
+enum class ServerMode {
+    CPU,
+    GPU
+};
+
 class Server {
 public:
-    bool init(uint16_t port);   // start listening on the given port
+    bool init(uint16_t port, ServerMode mode = ServerMode::CPU);   // start listening on the given port
     void tick(float dt);        // Single tick for client management
     void shutdown();            // shutdown server
 
@@ -40,12 +45,18 @@ public:
     bool isRunning() const { return net_running; }
 
 private:
+    ServerMode serverMode = ServerMode::CPU;
+
     // ======================================================================
     // Networking data
     // ======================================================================
     ENetHost* net_host          = nullptr;
     bool      net_running       = false;
     uint32_t  net_nextPlayerId  = 1;
+
+    // Chunk steaming
+    void queueChunkForPeer( EntityId id, const ChunkCoord& coord); 
+    void flushChunkQueues();
 
     // Internal packet handlers
     void onConnect   (ENetPeer* peer);
@@ -60,6 +71,7 @@ private:
     // map from network layer to ECS
     std::unordered_map<ENetPeer*, EntityId> peerToEntity;
     std::mutex playersMutex;
+    std::vector<PlayerSnapshot> buildPlayerSnapshots();
 
     // =========================================================
     // World + chunk pipeline

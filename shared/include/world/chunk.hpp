@@ -14,7 +14,8 @@
 
 // 3D Cube of blocks
 // No limit on world size
-#define CHUNK_SIZE 32
+#define CHUNK_SIZE 16
+#define CHUNK_VOLUME (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE)
 
 // Chunk world coordnates
 struct ChunkCoord {

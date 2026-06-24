@@ -4,26 +4,34 @@
 #include <cstdlib>
 #include <chrono>
 #include <thread>
+#include <cstring>
 #include <enet/enet.h>
 
 #include "server/server.hpp"
 
 int main(int argc, char* argv[]) {
-    // check init
     if (enet_initialize() != 0) {
         fprintf(stderr, "Failed to initialize ENet\n");
         exit(EXIT_FAILURE);
     }
 
-    // bind ports
-    uint16_t port = 7777; // default
-    if (argc >= 2) {
-        port = static_cast<uint16_t>(std::atoi(argv[1]));
+    uint16_t   port = 7777;
+    ServerMode mode = ServerMode::CPU;
+
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--gpu") == 0)
+            mode = ServerMode::GPU;
+        else if (strcmp(argv[i], "--cpu") == 0)
+            mode = ServerMode::CPU;
+        else
+            port = static_cast<uint16_t>(std::atoi(argv[i]));
     }
+
+    printf("[Server] Mode: %s, Port: %u\n", mode == ServerMode::GPU ? "GPU" : "CPU", port);
 
     // make server
     Server server;
-    if (!server.init(port)) {
+    if (!server.init(port, mode)) {
         enet_deinitialize();
         fprintf(stderr, "Server init failed.\n");
         exit(EXIT_FAILURE);

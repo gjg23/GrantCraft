@@ -21,9 +21,16 @@ struct PositionComp {
 };
 
 struct NetworkComp {
-    ENetPeer* peer     = nullptr;
-    uint32_t  playerId = 0;
-    char      username[16] = {};
+    ENetPeer* peer = nullptr;
+    uint32_t playerId = 0;
+    char username[16] = {};
+
+    // Chunks waiting to be transmitted.
+    std::deque<ChunkCoord> pendingChunkSends;
+
+    // Prevent duplicate queueing while waiting.
+    std::unordered_set<ChunkCoord, ChunkCoordHash> queuedChunkSends;
+
 };
 
 // Which chunks this entity has been sent; used to avoid re-sending.

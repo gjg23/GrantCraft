@@ -7,13 +7,12 @@
 
 #include "generation/terrain_gen.hpp"
 #include "generation/terrain_detail.hpp"
-#include "math/noise.hpp"
-#include "world/biome_rules.hpp"
+#include "generation/device_shared/noise.hpp"
 
 #include <cmath>
 #include <algorithm>
 
-using namespace Terrain;
+using namespace TerrainSettings;
 
 Chunk generateTerrain(const ChunkCoord& coord) {
     Chunk chunk(coord);
@@ -30,10 +29,9 @@ Chunk generateTerrain(const ChunkCoord& coord) {
     buildColumnCache(colCache, originX, originZ);
 
     // Skip cave lattice for chunks entirely above the water+margin line
-    const bool doCaves = (originY + CHUNK_SIZE) < (WATER_LEVEL + 4);
+    const bool doCaves = (originY < (BASE_HEIGHT + (int)HEIGHT_SCALE + (int)MOUNTAIN_AMP + 20));
     if (doCaves) buildCaveLattice(caveLat, originX, originY, originZ);
 
-    const float worldTopF = (float)(WORLD_HEIGHT_CHUNKS * CHUNK_SIZE);
     const float cf        = CAVE_BASE_FREQ;
     const float wormR     = CAVE_WORM_RADIUS;
     const int   wl        = WATER_LEVEL;
@@ -62,12 +60,8 @@ Chunk generateTerrain(const ChunkCoord& coord) {
             const float wz   = (float)(originZ + lz);
 
             // ---- 3D surface perturbation ----
-            // Fades out near the world ceiling to prevent floating terrain.
-            float ceilFade = 1.0f - fmaxf(0.0f, (wy_f - worldTopF * 0.75f) / (worldTopF * 0.25f));
-            ceilFade = fmaxf(0.0f, ceilFade);
             float pFreq   = HEIGHT_BASE_FREQ * 3.0f;
-            float perturb = fbm3D(wx * pFreq, wy_f * pFreq, wz * pFreq,
-                                  3, 1.8f, 0.5f) * ceilFade;
+            float perturb = fbm3D(wx * pFreq, wy_f * pFreq, wz * pFreq, 3, 1.8f, 0.5f);
             perturb = (perturb - 0.5f) * 12.0f;
 
             // ---- Density → block type ----

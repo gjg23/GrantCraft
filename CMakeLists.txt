@@ -2,8 +2,14 @@ cmake_minimum_required(VERSION 3.20)
 project(GrantCraft)
 
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CUDA_HOST_COMPILER clang-14)
+set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Add cuda support
+enable_language(CUDA)
 
 # ----- ENet for networking -----
 add_subdirectory(third_party/enet)
@@ -13,6 +19,7 @@ target_include_directories(enet PUBLIC
 
 # ----- OPenGL for client rendering -----
 find_package(OpenGL REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 
 # GLFW - prefer system package; falls back to source if not found
 find_package(glfw3 QUIET)

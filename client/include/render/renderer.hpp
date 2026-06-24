@@ -1,14 +1,12 @@
 #pragma once
-// render/renderer.hpp
-
+// client/include/render/renderer.hpp
+ 
 #include <glad.h>
 #include <glm/glm.hpp>
-#include <world/chunk.hpp>
-#include "render/chunk_mesh.hpp"
+ 
+#include "render/chunk_renderer.hpp"  // owns ChunkRenderer
 
 #include <unordered_map>
-
-class ChunkManager;
 
 // ------------------------------------------------------------------
 // RenderContext - passed each frame to all render calls
@@ -68,7 +66,7 @@ public:
 
     void beginFrame();
     void renderSky  (const RenderContext& ctx, const glm::vec3& camPos);
-    void renderWorld(const RenderContext& ctx, const glm::mat4& view, const glm::mat4& proj);
+    void renderWorld(const RenderContext& ctx);
 
     // Old: just used for drawing the player cubes
     void drawCube(const glm::mat4& view,
@@ -76,7 +74,15 @@ public:
                   const glm::vec3& worldPos,
                   const glm::vec3& colour);
 
-    void submitChunk(const ChunkCoord& coord, const Chunk& chunk);
+    // Feed new chunk data in from the network (thread-safe).
+    void submitChunk(const ChunkCoord& coord, std::vector<BlockType> blocks);
+ 
+    // Remove a chunk (main thread only).
+    void removeChunk(const ChunkCoord& coord);
+ 
+    // Block until background mesher drains (call once after initial load).
+    void waitMeshIdle() { m_chunkRenderer.waitIdle(); }
+ 
     void cleanup();
 
 private:
@@ -94,8 +100,8 @@ private:
     // Texture atlas
     GLuint m_atlasTex = 0;
 
-    // Chunk meshes, keyed by coord
-    std::unordered_map<ChunkCoord, ChunkMesh, ChunkCoordHash> m_meshes;
+    // Chunk meshing + GPU storage
+    ChunkRenderer m_chunkRenderer;
 
     // Cube geometry for drawCube()
     GLuint m_cubeVAO    = 0;

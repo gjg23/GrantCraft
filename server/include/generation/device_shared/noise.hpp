@@ -1,23 +1,21 @@
-// noise.h
 #pragma once
-#include "device/host_device.hpp"
+
+#include "generation/device_shared/host_device.hpp"
 #include <math.h>
 
-struct Vec3 { float x, y, z; };
+struct Vec3 {
+    float x;
+    float y;
+    float z;
+};
 
-#ifdef __CUDACC__
-    static __device__ __constant__ Vec3 kGrads[12] = {
+HD FINLINE Vec3 getGrad(unsigned int h) {
+    constexpr Vec3 grads[12] = {
         { 1, 1, 0}, {-1, 1, 0}, { 1,-1, 0}, {-1,-1, 0},
         { 1, 0, 1}, {-1, 0, 1}, { 1, 0,-1}, {-1, 0,-1},
-        { 0, 1, 1}, { 0,-1, 1}, { 0, 1,-1}, { 0,-1,-1}
-    };
-#else
-    static const Vec3 kGrads[12] = {
-        { 1, 1, 0}, {-1, 1, 0}, { 1,-1, 0}, {-1,-1, 0},
-        { 1, 0, 1}, {-1, 0, 1}, { 1, 0,-1}, {-1, 0,-1},
-        { 0, 1, 1}, { 0,-1, 1}, { 0, 1,-1}, { 0,-1,-1}
-    };
-#endif
+        { 0, 1, 1}, { 0,-1, 1}, { 0, 1,-1}, { 0,-1,-1}};
+    return grads[h];
+}
 
 HD FINLINE unsigned int ihash3(int x, int y, int z) {
     unsigned int h = 2166136261u;
@@ -31,7 +29,7 @@ HD FINLINE float fade(float t) { return t*t*t*(t*(t*6.0f-15.0f)+10.0f); }
 
 HD FINLINE float gradF(int ix, int iy, int iz, float fx, float fy, float fz) {
     unsigned int h = ihash3(ix, iy, iz) % 12;
-    Vec3 g = kGrads[h];
+    Vec3 g = getGrad(h);
     return g.x*fx + g.y*fy + g.z*fz;
 }
 
@@ -111,17 +109,17 @@ HD FINLINE float worleyNoise3D(float x, float y, float z) {
     return fminf(minDist * 1.4142f, 1.0f);
 }
 
-// Trilinear interpolation
+// Trilinear interpolation 
 HD FINLINE float trilerp(
-    float c000, float c100, float c010, float c110,
-    float c001, float c101, float c011, float c111,
-    float tx,   float ty,   float tz)
+    float c000, float c100, float c010, float c110, 
+    float c001, float c101, float c011, float c111, 
+    float tx, float ty, float tz) 
 {
     float c00 = c000 + (c100 - c000) * tx;
     float c10 = c010 + (c110 - c010) * tx;
     float c01 = c001 + (c101 - c001) * tx;
     float c11 = c011 + (c111 - c011) * tx;
-    float c0  = c00  + (c10  - c00 ) * ty;
-    float c1  = c01  + (c11  - c01 ) * ty;
-    return       c0  + (c1   - c0  ) * tz;
+    float c0 = c00 + (c10 - c00 ) * ty;
+    float c1 = c01 + (c11 - c01 ) * ty;
+    return c0 + (c1 - c0 ) * tz;
 }

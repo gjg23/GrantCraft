@@ -5,13 +5,13 @@
 // =============================================================
 
 #include "generation/terrain_detail.hpp"
-#include "math/noise.hpp"
-#include "math/spline.hpp"
+#include "generation/device_shared/noise.hpp"
+#include "generation/device_shared/spline.hpp"
 
 #include <algorithm>
 #include <cmath>
 
-using namespace Terrain;
+using namespace TerrainSettings;
 
 // ------------------------------------------------------------------
 // Column cache
