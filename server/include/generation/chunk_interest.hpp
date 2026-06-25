@@ -16,7 +16,7 @@ using EntityId = uint32_t;
 // Per-player chunk subscription state
 struct PlayerInterestState {
     ChunkCoord lastChunk = { INT_MAX, INT_MAX, INT_MAX };
-    int renderDistance = 8;
+    int renderDistance = 48;
  
     // The set of chunk coords this player is currently subscribed to
     std::unordered_set<ChunkCoord, ChunkCoordHash> subscribedChunks;

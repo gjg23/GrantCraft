@@ -98,6 +98,23 @@ void Client::sendInput(float x, float y, float z, float yaw, float pitch) {
     enet_peer_send(m_peer, CHANNEL_UNRELIABLE, ep);
 }
 
+bool Client::copyChunkBlocks(const ChunkCoord& c, std::vector<BlockType>& out) const {
+    std::lock_guard<std::mutex> lk(m_chunkMutex);
+    return m_cache.copyBlocks(c, out);
+}
+
+ChunkCache::TierDelta Client::updatePlayerChunk(float x, float y, float z) {
+    ChunkCoord newChunk{
+        static_cast<int>(std::floor(x / CHUNK_SIZE)),
+        static_cast<int>(std::floor(y / CHUNK_SIZE)),
+        static_cast<int>(std::floor(z / CHUNK_SIZE))
+    };
+
+    std::lock_guard<std::mutex> lk(m_chunkMutex);
+    m_playerChunk = newChunk;
+    return m_cache.onPlayerMoved(newChunk);
+}
+
 void Client::disconnect() {
     if (!m_peer || !m_connected) return;
 
@@ -117,9 +134,7 @@ void Client::onReceive(ENetPacket* packet) {
     if (packet->dataLength < 1) return;
 
     auto type = static_cast<PacketType>(packet->data[0]);
-
     switch (type) {
-
         case PacketType::S_WELCOME: {
             if (packet->dataLength < sizeof(PKT_S_Welcome)) break;
             PKT_S_Welcome pkt;
@@ -153,17 +168,32 @@ void Client::onReceive(ENetPacket* packet) {
                     packet->dataLength, sizeof(PKT_S_ChunkData));
                 break;
             }
-            PKT_S_ChunkData pkt;
-            memcpy(&pkt, packet->data, sizeof(pkt));
+            PKT_S_ChunkData hdr;
+            memcpy(&hdr, packet->data, sizeof(hdr));
 
-            ChunkCoord coord{ pkt.cx, pkt.cy, pkt.cz };
-            Chunk chunk(coord);
-            chunk.blocks.resize(CHUNK_VOLUME);
-            memcpy(chunk.blocks.data(), pkt.blocks, CHUNK_VOLUME * sizeof(BlockType));
+            if (packet->dataLength < sizeof(PKT_S_ChunkData) + hdr.dataSize) {
+                printf("[Client] S_CHUNK_DATA truncated (%d,%d,%d)\n", hdr.cx, hdr.cy, hdr.cz);
+                break;
+            }
 
+            const uint8_t* payload = packet->data + sizeof(PKT_S_ChunkData);
+            std::vector<BlockType> blocks(CHUNK_VOLUME);
+
+            if (hdr.compressed) {
+                if (!rleDecodeBlocks(payload, hdr.dataSize, blocks.data(), CHUNK_VOLUME)) {
+                    printf("[Client] RLE decode failed for chunk (%d,%d,%d)\n",
+                        hdr.cx, hdr.cy, hdr.cz);
+                    break;
+                }
+            } else {
+                if (hdr.dataSize != CHUNK_VOLUME * sizeof(BlockType)) break;
+                memcpy(blocks.data(), payload, hdr.dataSize);
+            }
+
+            ChunkCoord coord{ hdr.cx, hdr.cy, hdr.cz };
             std::lock_guard<std::mutex> lk(m_chunkMutex);
-            m_chunks[coord] = std::move(chunk);
-            m_newChunks.push_back(coord);
+            ChunkTier tier = m_cache.receive(coord, std::move(blocks), m_playerChunk);
+            m_newChunkEvents.push_back({ coord, tier });
             break;
         }
 

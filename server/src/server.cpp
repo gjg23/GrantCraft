@@ -161,7 +161,7 @@ void Server::tick(float dt) {
 void Server::shutdown() {
     if (!net_host) return;
 
-    workerPool->shutdown();
+    if (workerPool) workerPool->shutdown();
 
     // Gracefully disconnect all peers
     {
@@ -171,7 +171,12 @@ void Server::shutdown() {
     }
 
     ENetEvent event;
-    enet_host_service(net_host, &event, 500);
+    uint32_t deadline = 500;
+    while (enet_host_service(net_host, &event, deadline) > 0) {
+        if (event.type == ENET_EVENT_TYPE_RECEIVE)
+            enet_packet_destroy(event.packet);
+        deadline = 0;
+    }
 
     enet_host_destroy(net_host);
     net_host    = nullptr;
@@ -250,7 +255,7 @@ void Server::onReceive(ENetPeer* peer, ENetPacket* packet) {
             printf("[Server] Player %u joined as \"%s\"\n", nc->playerId, nc->username);
 
             // Send all currently loaded chunks to the new player
-            sendLoadedChunksToPeer(peer, it->second);
+            // sendLoadedChunksToPeer(peer, it->second);
             break;
         }
 
@@ -381,23 +386,53 @@ void Server::systemChunkDispatch(float dt) {
 
 void Server::systemNetworkFlush(float dt) {
     // Chunk sends — bounded per tick to avoid saturating the link
-    constexpr int MAX_CHUNKS_PER_TICK = 16;
-    int sent = 0;
+    constexpr uint32_t PEER_BYTE_BUDGET = 256u * 1024u;
+
+    struct PendingSend {
+        ChunkCoord coord;
+        EntityId   recipient;
+        ENetPeer*  peer;
+        int        distSq;
+    };
+    std::vector<PendingSend> pendingSends;
 
     auto sendWork = chunkRegistry.collectSendWork();
     for (auto& work : sendWork) {
-        if (sent >= MAX_CHUNKS_PER_TICK) break;
-
         for (EntityId id : work.recipients) {
-            if (sent >= MAX_CHUNKS_PER_TICK) break;
-
-            auto* nc = ecs.network(id);
+            auto* nc  = ecs.network(id);
             if (!nc) continue;
 
-            sendChunkToPeer(nc->peer, work.coord);
-            chunkRegistry.markSentTo(work.coord, id);
-            ++sent;
+            // Compute squared XZ distance from this player to this chunk
+            int distSq = 0;
+            if (auto* pos = ecs.position(id)) {
+                int dx = work.coord.x - static_cast<int>(std::floor(pos->pos.x / CHUNK_SIZE));
+                int dz = work.coord.z - static_cast<int>(std::floor(pos->pos.z / CHUNK_SIZE));
+                distSq = dx*dx + dz*dz;
+            }
+            pendingSends.push_back({ work.coord, id, nc->peer, distSq });
         }
+    }
+
+    // Nearest chunks first
+    std::sort(pendingSends.begin(), pendingSends.end(),
+        [](const PendingSend& a, const PendingSend& b) {
+            return a.distSq < b.distSq;
+        });
+
+    // Send, gated by per-peer byte budget
+    std::unordered_map<ENetPeer*, uint32_t> peerBytesSent;
+    peerBytesSent.reserve(peerToEntity.size());
+
+    for (auto& ps : pendingSends) {
+        uint32_t& used = peerBytesSent[ps.peer];
+        if (used >= PEER_BYTE_BUDGET) continue;
+
+        uint32_t sent = sendChunkToPeer(ps.peer, ps.coord);
+        if (sent == 0) continue;
+
+        chunkRegistry.markSentTo(ps.coord, ps.recipient);
+        used            += sent;
+        m_bytesSentTick += sent;
     }
 
     broadcastPlayerStates();
@@ -407,17 +442,38 @@ void Server::systemNetworkFlush(float dt) {
 // ------------------------------------------------------------------
 // Outbound packet helpers
 // ------------------------------------------------------------------
-void Server::sendChunkToPeer(ENetPeer* peer, const ChunkCoord& coord) {
+uint32_t Server::sendChunkToPeer(ENetPeer* peer, const ChunkCoord& coord) {
     auto* chunk = world.getChunk(coord);
-    if (!chunk) return;
+    if (!chunk) return 0;
 
-    PKT_S_ChunkData pkt;
-    pkt.cx = coord.x;
-    pkt.cy = coord.y;
-    pkt.cz = coord.z;
-    memcpy(pkt.blocks, chunk->blocks.data(), CHUNK_VOLUME * sizeof(BlockType));
+    const uint32_t rawSize = CHUNK_VOLUME * static_cast<uint32_t>(sizeof(BlockType));
+    // Worst-case RLE: every block different
+    const uint32_t maxRle  = CHUNK_VOLUME * static_cast<uint32_t>(sizeof(uint16_t) + sizeof(BlockType));
 
-    enet_peer_send(peer, CHANNEL_RELIABLE, makePacket(pkt, ENET_PACKET_FLAG_RELIABLE));
+    std::vector<uint8_t> compBuf(maxRle);
+    uint32_t compSize = rleEncodeBlocks(
+        chunk->blocks.data(), CHUNK_VOLUME, compBuf.data(), maxRle);
+
+    bool useCompressed  = (compSize > 0 && compSize < rawSize);
+    uint32_t payloadSz  = useCompressed ? compSize : rawSize;
+
+    PKT_S_ChunkData hdr;
+    hdr.cx         = coord.x;
+    hdr.cy         = coord.y;
+    hdr.cz         = coord.z;
+    hdr.compressed = useCompressed ? 1u : 0u;
+    hdr.dataSize   = payloadSz;
+
+    uint32_t totalSize = static_cast<uint32_t>(sizeof(hdr)) + payloadSz;
+    ENetPacket* pkt = enet_packet_create(nullptr, totalSize, ENET_PACKET_FLAG_RELIABLE);
+    memcpy(pkt->data, &hdr, sizeof(hdr));
+    if (useCompressed)
+        memcpy(pkt->data + sizeof(hdr), compBuf.data(), compSize);
+    else
+        memcpy(pkt->data + sizeof(hdr), chunk->blocks.data(), rawSize);
+
+    enet_peer_send(peer, CHANNEL_RELIABLE, pkt);
+    return totalSize;
 }
 
 void Server::sendLoadedChunksToPeer(ENetPeer* peer, EntityId id) {

@@ -197,6 +197,10 @@ void Renderer::submitChunk(const ChunkCoord& coord, std::vector<BlockType> block
     m_chunkRenderer.onChunkReceived(coord, std::move(blocks));
 }
 
+void Renderer::setChunkVisible(const ChunkCoord& coord, bool visible) {
+    m_chunkRenderer.setChunkVisible(coord, visible);
+}
+
 void Renderer::removeChunk(const ChunkCoord& coord) {
     m_chunkRenderer.onChunkRemoved(coord);
 }

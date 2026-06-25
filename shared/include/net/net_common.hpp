@@ -5,6 +5,7 @@
 // Channel numbers
 
 #include <cstdint>
+#include <cstring>
 #include <enet/enet.h>
 #include <world/chunk.hpp>
 #include "world/shared_player_state.hpp"
@@ -68,14 +69,47 @@ struct PKT_S_PlayerState {
     PlayerNetState players[64];
 };
 
-// Server -> Client: full block data for one chunk
-// This is large (~65KB per chunk) so send reliable and only once per chunk
+// Server -> Client
 struct PKT_S_ChunkData {
-    PacketType type = PacketType::S_CHUNK_DATA;
-    int32_t    cx, cy, cz;                    // chunk coordinate
-    uint32_t   blockCount = CHUNK_VOLUME;
-    BlockType  blocks[CHUNK_VOLUME];
+    PacketType type       = PacketType::S_CHUNK_DATA;
+    int32_t    cx, cy, cz;
+    uint32_t   dataSize;    // byte count of the payload that follows this header
+    uint8_t    compressed;  // 1 = RLE-encoded BlockType stream, 0 = raw
 };
+
+inline uint32_t rleEncodeBlocks(const BlockType* src, uint32_t count,
+                                uint8_t* out, uint32_t outCapacity)
+{
+    uint32_t outPos = 0, i = 0;
+    while (i < count) {
+        BlockType val    = src[i];
+        uint16_t  runLen = 1;
+        while (i + runLen < count && src[i + runLen] == val && runLen < 0xFFFFu)
+            ++runLen;
+        if (outPos + sizeof(uint16_t) + sizeof(BlockType) > outCapacity)
+            return 0; // overflow
+        memcpy(out + outPos, &runLen, sizeof(runLen)); outPos += sizeof(runLen);
+        memcpy(out + outPos, &val,    sizeof(val));    outPos += sizeof(val);
+        i += runLen;
+    }
+    return outPos;
+}
+
+inline bool rleDecodeBlocks(const uint8_t* in, uint32_t inSize,
+                            BlockType* out, uint32_t outCount)
+{
+    uint32_t inPos = 0, outPos = 0;
+    while (inPos + sizeof(uint16_t) + sizeof(BlockType) <= inSize) {
+        uint16_t  runLen = 0;
+        BlockType val    = {};
+        memcpy(&runLen, in + inPos, sizeof(runLen)); inPos += sizeof(runLen);
+        memcpy(&val,    in + inPos, sizeof(val));    inPos += sizeof(val);
+        if (outPos + runLen > outCount) return false;
+        for (uint16_t j = 0; j < runLen; ++j)
+            out[outPos++] = val;
+    }
+    return outPos == outCount;
+}
 
 
 // ----- helper: wrap POD struct in ENet packet -----

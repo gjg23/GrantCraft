@@ -68,8 +68,7 @@ ChunkRenderer::~ChunkRenderer() {
 // ---------------------------------------------------------------------------
 // onChunkReceived
 // ---------------------------------------------------------------------------
-void ChunkRenderer::onChunkReceived(const ChunkCoord& coord, std::vector<BlockType> blocks)
-{
+void ChunkRenderer::onChunkReceived(const ChunkCoord& coord, std::vector<BlockType> blocks) {
     std::lock_guard<std::mutex> lk(m_dataMutex);
 
     // Store (or replace) block data
@@ -84,19 +83,30 @@ void ChunkRenderer::onChunkReceived(const ChunkCoord& coord, std::vector<BlockTy
     }
 }
 
+void ChunkRenderer::setChunkVisible(const ChunkCoord& coord, bool visible) {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
+
+    if (visible) m_visibleChunks.insert(coord);
+    else m_visibleChunks.erase(coord);
+}
+
 // ---------------------------------------------------------------------------
 // onChunkRemoved - main thread only
 // ---------------------------------------------------------------------------
 void ChunkRenderer::onChunkRemoved(const ChunkCoord& coord) {
     {
         std::lock_guard<std::mutex> lk(m_dataMutex);
+
+        m_mesher.cancel(coord);
+
+        m_visibleChunks.erase(coord);
         m_chunkData.erase(coord);
 
-        // Re-mesh neighbours so they expose their now-border faces
         for (const auto& d : kDirs) {
-            ChunkCoord nc{coord.x + d.x, coord.y + d.y, coord.z + d.z};
-            if (m_chunkData.count(nc))
+            ChunkCoord nc{ coord.x + d.x, coord.y + d.y, coord.z + d.z };
+            if (m_chunkData.count(nc)) {
                 enqueueMesh(nc);
+            }
         }
     }
 
@@ -124,12 +134,19 @@ void ChunkRenderer::render(const glm::mat4& proj, const glm::mat4& view) {
         }
         m_gpuMeshes[md.coord].upload(md.verts, md.idxs);
     });
+    std::unordered_set<ChunkCoord, ChunkCoordHash> visibleSnapshot;
+    {
+        std::lock_guard<std::mutex> lk(m_dataMutex);
+        visibleSnapshot = m_visibleChunks;
+    }
 
     // Build frustum from current camera
     Frustum frustum = Frustum::fromMatrix(proj * view);
 
     // Draw every chunk whose AABB intersects the frustum
     for (auto& [coord, mesh] : m_gpuMeshes) {
+        if (!visibleSnapshot.count(coord)) continue;
+        
         // AABB in world space
         glm::vec3 minP{
             static_cast<float>(coord.x * CHUNK_SIZE),

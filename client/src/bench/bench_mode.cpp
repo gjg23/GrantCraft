@@ -136,7 +136,7 @@ void runBenchMode(const char* host, uint16_t port,
         client.tick();
 
         // Count new chunks
-        auto newChunks = client.getAndClearNewChunks();
+        auto newChunks = client.drainNewChunks();
         if (!newChunks.empty() && !m.firstChunkRecorded) {
             m.firstChunkTime     = Clock::now();
             m.firstChunkRecorded = true;

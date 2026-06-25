@@ -8,6 +8,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include <unordered_set>
 
 #include <glad.h>
 #include <glm/glm.hpp>
@@ -39,6 +40,8 @@ public:
     // Called when a new chunk packet arrives
     void onChunkReceived(const ChunkCoord& coord, std::vector<BlockType> blocks);
 
+    void setChunkVisible(const ChunkCoord& coord, bool visible);
+
     // Called when a chunk is unloaded (main thread only currently)
     void onChunkRemoved(const ChunkCoord& coord);
 
@@ -63,6 +66,8 @@ private:
     mutable std::mutex m_dataMutex;
     std::unordered_map<ChunkCoord, std::shared_ptr<std::vector<BlockType>>, ChunkCoordHash> 
         m_chunkData;
+
+    std::unordered_set<ChunkCoord, ChunkCoordHash> m_visibleChunks;
 
     // Mesher
     ChunkMesher m_mesher;

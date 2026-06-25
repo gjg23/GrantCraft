@@ -222,6 +222,39 @@ int main(int argc, char* argv[]) {
         input.update(win.handle, localPlayer, win.isCursorLocked());
         if (input.escapePressed) win.toggleCursor();
 
+        auto tierDelta = client.updatePlayerChunk(
+            localPlayer.state.position.x,
+            localPlayer.state.position.y,
+            localPlayer.state.position.z
+        );
+
+        // Apply movement-driven chunk transitions for already-cached chunks.
+
+        // 1) Chunks that must become renderer-resident again
+        for (const auto& coord : tierDelta.toLoadRenderer) {
+            std::vector<BlockType> blocks;
+            if (client.copyChunkBlocks(coord, blocks)) {
+                renderer.submitChunk(coord, std::move(blocks));
+                client.markRendererResident(coord);
+            }
+        }
+
+        // 2) Chunks entering render distance: show
+        for (const auto& coord : tierDelta.toShow) {
+            renderer.setChunkVisible(coord, true);
+        }
+
+        // 3) Chunks leaving render distance but still inside simulation distance: hide only
+        for (const auto& coord : tierDelta.toHide) {
+            renderer.setChunkVisible(coord, false);
+        }
+
+        // 4) Chunks leaving simulation distance entirely: drop renderer-side storage
+        for (const auto& coord : tierDelta.toDropRenderer) {
+            renderer.removeChunk(coord);
+            client.markRendererReleased(coord);
+        }
+
         // Send predicted position to server
         if (client.isConnected()) {
             client.sendInput(
@@ -233,17 +266,21 @@ int main(int argc, char* argv[]) {
             );
         }
 
+
         // Pump incoming packets — updates client.getRemotePlayers()
         client.tick();
         if (isDebug) debug.update(client);
-        for (const auto& coord : client.getAndClearNewChunks()) {
-            const auto& chunks = client.getChunks();
-            auto it = chunks.find(coord);
-            if (it != chunks.end()) {
-                // Pass a copy of the block data; renderer owns it from here
-                renderer.submitChunk(coord, it->second.blocks);
+
+        // Newly arrived chunks from the server:
+        for (auto& evt : client.drainNewChunks()) {
+            if (evt.tier == ChunkTier::Render) {
+                std::vector<BlockType> blocks;
+                if (client.copyChunkBlocks(evt.coord, blocks)) {
+                    renderer.submitChunk(evt.coord, std::move(blocks));
+                    client.markRendererResident(evt.coord);
+                    renderer.setChunkVisible(evt.coord, true);
+                }
             }
-            if (isDebug) debug.onChunkReceived();
         }
 
         // Render

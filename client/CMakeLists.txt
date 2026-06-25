@@ -35,6 +35,7 @@ add_library(game_core
     src/game_core/input.cpp
     src/game_core/player_state.cpp
     src/game_core/camera.cpp
+    src/game_core/chunk_cache.cpp
 )
 target_include_directories(game_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

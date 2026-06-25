@@ -76,6 +76,9 @@ public:
 
     // Feed new chunk data in from the network (thread-safe).
     void submitChunk(const ChunkCoord& coord, std::vector<BlockType> blocks);
+
+    // Hide/show without destroying mesh residency
+    void setChunkVisible(const ChunkCoord& coord, bool visible);
  
     // Remove a chunk (main thread only).
     void removeChunk(const ChunkCoord& coord);

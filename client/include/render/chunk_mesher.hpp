@@ -56,6 +56,9 @@ public:
     // job is discarded when the worker reaches it.
     void enqueue(MeshJob job);
 
+    // Invalidate any queued / in-flight result for this chunk.
+    void cancel(const ChunkCoord& coord); 
+
     // Call once per frame from the render thread.
     // Invokes cb for every MeshData that the worker has finished since last drain.
     void drain(ReadyCallback cb);

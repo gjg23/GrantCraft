@@ -37,6 +37,7 @@ struct GPUJob {
 class ChunkWorkerPool {
 public:
     explicit ChunkWorkerPool(GenBackend backend);
+    ~ChunkWorkerPool() { shutdown(); }
 
     // Start worker threads. Call once at server init.
     void init(int threadCount = -1);  // -1 = hardware_concurrency - 1

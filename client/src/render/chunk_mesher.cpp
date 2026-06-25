@@ -176,6 +176,13 @@ void ChunkMesher::enqueue(MeshJob job) {
     m_inCV.notify_one();
 }
 
+void ChunkMesher::cancel(const ChunkCoord& coord) {
+    std::lock_guard<std::mutex> lk(m_inMutex);
+
+    // Invalidate any queued or in-flight results for this coord.
+    ++m_generation[coord];
+}
+
 void ChunkMesher::drain(ReadyCallback cb) {
     std::queue<MeshData> local;
     {

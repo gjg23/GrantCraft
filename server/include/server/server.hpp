@@ -95,9 +95,9 @@ private:
     void systemNetworkFlush  (float dt);    // broadcast player states + ready chunks
 
     // Outbound packet helpers
-    void sendChunkToPeer        (ENetPeer* peer, const ChunkCoord& coord);
+    uint32_t sendChunkToPeer(ENetPeer* peer, const ChunkCoord& coord);
     void sendLoadedChunksToPeer(ENetPeer* peer, EntityId id);
-    void broadcastPlayerStates  ();
+    void broadcastPlayerStates();
 
     // Debug stats
     uint32_t m_tickCount       = 0;
