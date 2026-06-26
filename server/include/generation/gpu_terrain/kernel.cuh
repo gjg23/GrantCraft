@@ -21,11 +21,13 @@ struct TerrainParams {
     float caveWormRadius;
 };
 
-// extern __constant__ TerrainParams gTerrainParams;
+struct GpuColumn {
+    float surfaceY;
+    int   biome;
+};
 
 void uploadTerrainParams(const TerrainParams& p);
 
-// build a TerrainParams from the CPU-side namespace
 inline TerrainParams makeTerrainParams() {
     using namespace TerrainSettings;
     TerrainParams p{};
@@ -47,10 +49,14 @@ inline TerrainParams makeTerrainParams() {
     return p;
 }
 
-// Single unified kernel
+
 __global__
-void terrainKernel(
-    BlockType* blocks,
-    int originX,
-    int originY,
-    int originZ);
+void columnKernel(GpuColumn* cols, int originX, int originZ);
+
+__global__
+void caveLatticeKernel(float* n1, float* n2, int originX, int originY, int originZ);
+
+__global__
+void densityKernel(BlockType* blocks, const GpuColumn* cols,
+                   const float* n1, const float* n2,
+                   int originX, int originY, int originZ, int doCaves);

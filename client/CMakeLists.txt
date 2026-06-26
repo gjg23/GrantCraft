@@ -54,6 +54,11 @@ add_library(client_core
     src/client_core/local_server.cpp
     src/bench/bench_mode.cpp
     src/bench/debug_mode.cpp
+    src/bench/metrics.cpp
+    src/bench/dummy_client.cpp
+    src/bench/gen_bench.cpp
+    src/bench/load_test.cpp
+    src/bench/bench_runner.cpp
 )
 target_include_directories(client_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

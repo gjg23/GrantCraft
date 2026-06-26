@@ -132,7 +132,7 @@ void Client::disconnect() {
 
 void Client::onReceive(ENetPacket* packet) {
     if (packet->dataLength < 1) return;
-
+    m_totalBytesReceived += packet->dataLength; // for testing
     auto type = static_cast<PacketType>(packet->data[0]);
     switch (type) {
         case PacketType::S_WELCOME: {

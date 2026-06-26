@@ -33,8 +33,7 @@
 #include "game_core/remote_player.hpp"
 
 // Debug
-#include "bench/bench_mode.hpp"
-#include "bench/debug_mode.hpp"
+#include "client_core/command_options.hpp"
 
 int main(int argc, char* argv[]) {
     // -----------------------------------------------------------------------------
@@ -62,74 +61,58 @@ int main(int argc, char* argv[]) {
     //
     // -----------------------------------------------------------------------------
     
-    // Defaults
-    ServerMode mode = ServerMode::CPU;
-    const char* host     = "127.0.0.1";
-    uint16_t    port     = 7777;
-    const char* username = "player";
-    bool isBench = false;
-    bool isDebug = false;
-    int radius = -1;
-    const char* remoteHost = nullptr;
-    uint16_t remotePort = 0;
+    CommandLineOptions opt;
 
-    // Parsing loop
-    for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--gpu") == 0) {
-            mode = ServerMode::GPU;
-        }
-        else if (strcmp(argv[i], "--cpu") == 0) {
-            mode = ServerMode::CPU;
-        }
-        else if (strcmp(argv[i], "--bench") == 0) {
-            isBench = true;
-        }
-        else if (strcmp(argv[i], "--debug") == 0) {
-            isDebug = true;
-        }
-        else if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
-            host = argv[++i];
-        }
-        else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-            port = static_cast<uint16_t>(atoi(argv[++i]));
-        }
-        else if (strcmp(argv[i], "--user") == 0 && i + 1 < argc) {
-            username = argv[++i];
-        }
-        else if (strcmp(argv[i], "--bench-radius") == 0 && i + 1 < argc) {
-            radius = atoi(argv[++i]);
-        }
-        else if (!remoteHost) {
-            remoteHost = argv[i];
-        }
-        else if (remotePort == 0) {
-            remotePort = static_cast<uint16_t>(atoi(argv[i]));
-        }
-        else {
-            fprintf(stderr, "Unknown argument: %s\n", argv[i]);
-            return 1;
-        }
-    }
-
-    const bool singleplayer = (remoteHost == nullptr);
-
-    // branch into different modes
-    if (singleplayer) {
-        remoteHost = "127.0.0.1";
-        remotePort = 7778;
-    }
-    if (isBench) {
-        runBenchMode(host, port, username, radius);
-        return 0;
-    }
-    if (!singleplayer && remotePort == 0) {
-        fprintf(stderr, "Usage: %s [host port] [--gpu|--cpu]\n", argv[0]);
+    if (!ArgumentParser::parse(argc, argv, opt))
         return 1;
+
+    bool singleplayer = opt.singleplayer();
+
+    if (singleplayer)
+    {
+        opt.remoteHost = "127.0.0.1";
+        opt.remotePort = 7778;
+    }
+
+    if (!singleplayer && opt.remotePort == 0)
+    {
+        fprintf(stderr,
+                "Usage: %s [host port]\n",
+                argv[0]);
+        return 1;
+    }
+
+    if (opt.isBench)
+    {
+        BenchArgs ba;
+
+        ba.mode = opt.benchMode;
+        ba.radius = (opt.radius > 0) ? opt.radius : 4;
+        ba.genCPU = !opt.benchGPU;
+        ba.genGPU = opt.benchGPU ||
+                    (opt.mode == ServerMode::GPU);
+
+        ba.port = singleplayer
+                    ? 7779
+                    : opt.remotePort;
+
+        ba.players = opt.benchPlayers;
+        ba.durationS = opt.benchDuration;
+        ba.spawnRadius = opt.benchSpawnR;
+        ba.stationaryS = opt.benchStationary;
+        ba.gpuServer =
+            (opt.mode == ServerMode::GPU) ||
+            opt.benchGPU;
+
+        ba.csvPath = opt.benchOutput;
+
+        runBench(ba);
+        return 0;
     }
 
     // Setup debugger if enabled (just extra terminal output)
     DebugOverlay debug;
-    if (isDebug) debug.init();
+    if (opt.isDebug) debug.init();
 
     // Start ENet client
     printf("Starting ENet.\n");
@@ -145,7 +128,7 @@ int main(int argc, char* argv[]) {
     LocalServer localServer;
     if (singleplayer) {
         printf("Starting local server.\n");
-        if (!localServer.start(remotePort, mode)) {
+        if (!localServer.start(opt.remotePort, opt.mode)) {
             enet_deinitialize();
             fprintf(stderr, "Staring local server failed.\n");
             exit(EXIT_FAILURE);
@@ -201,9 +184,9 @@ int main(int argc, char* argv[]) {
     // ------------------------------------------------------------------
     // Connect to the server (local or remote)
     // ------------------------------------------------------------------
-    printf("Connecting to %s:%u.\n", remoteHost, remotePort);
+    printf("Connecting to %s:%u.\n", opt.remoteHost, opt.remotePort);
     Client client;
-    if (!client.connect(remoteHost, remotePort, "Player1")) {
+    if (!client.connect(opt.remoteHost, opt.remotePort, "Player1")) {
         fprintf(stderr, "Could not connect to server.\n");
         exit(EXIT_FAILURE);
     }
@@ -269,7 +252,7 @@ int main(int argc, char* argv[]) {
 
         // Pump incoming packets — updates client.getRemotePlayers()
         client.tick();
-        if (isDebug) debug.update(client);
+        if (opt.isDebug) debug.update(client);
 
         // Newly arrived chunks from the server:
         for (auto& evt : client.drainNewChunks()) {

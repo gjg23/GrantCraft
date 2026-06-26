@@ -91,10 +91,11 @@ public:
         return m_remotePlayers;
     }
 
-    // ---- Debug -------------------------------------------------------
+    // ---- Debug & testing -------------------------------------------------------
     void                  sendDebugQuery();
     bool                  hasPendingDebugSnapshot() const;
     PKT_S_DebugSnapshot   popDebugSnapshot();
+    uint64_t getTotalBytesReceived() const { return m_totalBytesReceived; }
 
 private:
     ENetHost* m_host            = nullptr;
@@ -119,4 +120,5 @@ private:
     // ---- debug stats ----
     bool                m_hasDebugSnapshot = false;
     PKT_S_DebugSnapshot m_debugSnapshot{};
+    uint64_t m_totalBytesReceived = 0;
 };

@@ -21,6 +21,9 @@ void ChunkRegistry::request(const ChunkCoord& coord, EntityId subscriber) {
         return;
 
     pend.push_back(subscriber);
+
+    if (entry.state == ChunkLifecycle::Sent)
+        entry.state = ChunkLifecycle::WorldReady;
 }
 
 void ChunkRegistry::removeSubscriber(EntityId id, const ChunkCoord& coord) {

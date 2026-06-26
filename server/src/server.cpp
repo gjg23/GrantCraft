@@ -150,8 +150,9 @@ void Server::tick(float dt) {
     float tickMs = std::chrono::duration<float, std::milli>(elapsed).count();
     m_lastTickMs = tickMs;
     scheduler->reportMetrics(tickMs, 0, 0);
-    m_bytesSentTick = 0;
-    m_bytesRecvTick = 0;
+    m_lastBytesSentTick = m_bytesSentTick;
+    m_bytesSentTick     = 0;
+    m_bytesRecvTick     = 0;
 }
 
 
@@ -279,10 +280,6 @@ void Server::onReceive(ENetPeer* peer, ENetPacket* packet) {
         }
 
         case PacketType::C_DEBUG_QUERY: {
-            std::lock_guard<std::mutex> lock(playersMutex);
-            auto it = peerToEntity.find(peer);
-            if (it == peerToEntity.end()) break;
-
             PKT_S_DebugSnapshot snap;
 
             // Registry counts
@@ -307,8 +304,8 @@ void Server::onReceive(ENetPeer* peer, ENetPacket* packet) {
 
             snap.tickRateHz            = m_measuredTickHz;
             snap.tickBudgetUsedPct     = (m_lastTickMs / 45.f) * 100.f;
-            snap.bytesSentThisTick     = m_bytesSentTick;
-            snap.bytesRecvThisTick     = m_bytesRecvTick;
+            snap.bytesSentThisTick = m_lastBytesSentTick;
+            snap.bytesRecvThisTick = m_bytesRecvTick;
 
             enet_peer_send(peer, CHANNEL_RELIABLE, makePacket(snap, ENET_PACKET_FLAG_RELIABLE));
             break;

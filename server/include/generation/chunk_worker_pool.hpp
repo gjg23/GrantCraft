@@ -27,11 +27,19 @@ struct CompletedChunk {
     Chunk      data;
 };
 
-// GPU async job (tracked inside the pool, main thread polls via pollGPU)
+struct GpuColumn;
+struct GPUBuffer {
+    BlockType*   d_blocks = nullptr;
+    BlockType*   h_blocks = nullptr;
+    GpuColumn*   d_cols   = nullptr;
+    float*       d_n1     = nullptr;
+    float*       d_n2     = nullptr;
+    cudaStream_t stream   = nullptr;
+};
+
 struct GPUJob {
-    ChunkCoord   coord;
-    BlockType*   blocks = nullptr;  // device pointer
-    cudaStream_t stream;
+    ChunkCoord coord;
+    int        bufferIdx;
 };
 
 class ChunkWorkerPool {
@@ -74,12 +82,21 @@ private:
     std::mutex              genQueueMutex;
     std::condition_variable genQueueCV;
 
+    // ---- GPU: coords staged by workers, launched by main thread only ----
+    std::priority_queue<PriCoord, std::vector<PriCoord>, std::greater<PriCoord>>
+                            gpuStagingQueue;
+    std::mutex              gpuStagingMutex;
+
     // ---- completed buffer (workers → main) ----
     std::vector<CompletedChunk> completedBuffer;
     std::mutex                  completedMutex;
 
     // ---- GPU jobs (main-thread only, no mutex needed) ----
-    std::vector<GPUJob> gpuJobs;
+    std::vector<GPUJob>     gpuJobs;
+    std::vector<GPUBuffer>  gpuBufferPool;
+    std::vector<int>        freeBufferIndices;
+    int                     MAX_GPU_IN_FLIGHT = 8196;
+    void initGPUPool();
 
     // ---- workers ----
     std::vector<std::thread> workers;
@@ -87,5 +104,5 @@ private:
 
     void workerLoop();
     void generateCPU(const ChunkCoord& coord);
-    void launchGPU  (const ChunkCoord& coord);
+    void launchGPU  (const ChunkCoord& coord, int distSq);
 };

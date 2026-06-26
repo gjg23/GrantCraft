@@ -122,13 +122,19 @@ static void renderDashboard(const DashState& s) {
            (unsigned long long)s.totalChunksRecv,
            (unsigned long long)s.totalBlocksRecv);
     printf("  Blocks/s  cur/avg/max : " ANSI_BOLD
-           "%.0f / %.0f / %.0f" ANSI_RESET "\n",
-           s.blocksPerSec.count ? s.blocksPerSec.buf[(s.blocksPerSec.pos-1+RollingStats::N)%RollingStats::N] : 0.f,
-           s.blocksPerSec.avg(), s.blocksPerSec.max());
+        "%.3f / %.3f / %.3f Mblk/s" ANSI_RESET "\n",
+        s.blocksPerSec.count
+            ? s.blocksPerSec.buf[(s.blocksPerSec.pos-1+RollingStats::N)%RollingStats::N] / 1e6f
+            : 0.f,
+        s.blocksPerSec.avg() / 1e6f,
+        s.blocksPerSec.max() / 1e6f);
     printf("  Chunks/s  cur/avg/max : " ANSI_BOLD
-           "%.1f / %.1f / %.1f" ANSI_RESET "\n",
-           s.chunksPerSec.count ? s.chunksPerSec.buf[(s.chunksPerSec.pos-1+RollingStats::N)%RollingStats::N] : 0.f,
-           s.chunksPerSec.avg(), s.chunksPerSec.max());
+        "%.1f / %.1f / %.1f" ANSI_RESET "\n",
+        s.chunksPerSec.count
+            ? s.chunksPerSec.buf[(s.chunksPerSec.pos-1+RollingStats::N)%RollingStats::N]
+            : 0.f,
+        s.chunksPerSec.avg(),
+        s.chunksPerSec.max());
     printf("  Bandwidth KB/s cur/avg/max : " ANSI_BOLD
            "%.1f / %.1f / %.1f" ANSI_RESET "\n",
            s.bwKBps.count ? s.bwKBps.buf[(s.bwKBps.pos-1+RollingStats::N)%RollingStats::N] : 0.f,

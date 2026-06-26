@@ -106,4 +106,5 @@ private:
     std::chrono::steady_clock::time_point m_tickRateTimer;
     uint32_t m_bytesSentTick   = 0;
     uint32_t m_bytesRecvTick   = 0;
+    uint32_t m_lastBytesSentTick = 0;
 };

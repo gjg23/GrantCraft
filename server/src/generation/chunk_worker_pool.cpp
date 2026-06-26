@@ -3,6 +3,8 @@
 #include "generation/chunk_worker_pool.hpp"
 #include "generation/terrain_gen.hpp"
 #include "generation/gpu_terrain/gpu_launch.cuh"
+#include "generation/gpu_terrain/kernel.cuh"
+#include "generation/terrain_detail.hpp"
 #include "world/chunk.hpp"
 
 #include <algorithm>
@@ -13,6 +15,10 @@ ChunkWorkerPool::ChunkWorkerPool(GenBackend backend) : backend(backend) {}
 void ChunkWorkerPool::init(int threadCount) {
     workerRunning = true;
 
+    if (backend == GenBackend::GPU) {
+        return;
+    }
+
     int count = (threadCount > 0)
         ? threadCount
         : static_cast<int>(std::max(1u, std::thread::hardware_concurrency() - 1));
@@ -22,15 +28,43 @@ void ChunkWorkerPool::init(int threadCount) {
         workers.emplace_back(&ChunkWorkerPool::workerLoop, this);
 }
 
+void ChunkWorkerPool::initGPUPool() {
+    return;
+}
+
 void ChunkWorkerPool::shutdown() {
+    // cpu
     workerRunning = false;
     genQueueCV.notify_all();
     for (auto& t : workers)
         if (t.joinable()) t.join();
     workers.clear();
+
+    // GPU
+    for (auto& job : gpuJobs) {
+        GPUBuffer& buf = gpuBufferPool[job.bufferIdx];
+        cudaStreamSynchronize(buf.stream);
+    }
+    gpuJobs.clear();
+
+    for (auto& buf : gpuBufferPool) {
+        if (buf.stream)   cudaStreamDestroy(buf.stream);
+        if (buf.d_blocks) cudaFree(buf.d_blocks);
+        if (buf.h_blocks) cudaFreeHost(buf.h_blocks);
+        if (buf.d_cols)   cudaFree(buf.d_cols);
+        if (buf.d_n1)     cudaFree(buf.d_n1);
+        if (buf.d_n2)     cudaFree(buf.d_n2);
+    }
+    gpuBufferPool.clear();
+    freeBufferIndices.clear();
 }
 
 void ChunkWorkerPool::submit(const ChunkCoord& coord, int priorityDistSq) {
+    if (backend == GenBackend::GPU) {
+        std::lock_guard<std::mutex> lk(gpuStagingMutex);
+        gpuStagingQueue.push({ coord, priorityDistSq });
+        return;
+    }
     {
         std::lock_guard<std::mutex> lk(genQueueMutex);
         genQueue.push({ coord, priorityDistSq });
@@ -39,36 +73,25 @@ void ChunkWorkerPool::submit(const ChunkCoord& coord, int priorityDistSq) {
 }
 
 std::vector<CompletedChunk> ChunkWorkerPool::drainCompleted() {
-    std::vector<CompletedChunk> out;
-    {
-        std::lock_guard<std::mutex> lk(completedMutex);
-        out = std::move(completedBuffer);
-        completedBuffer.clear();
-    }
-    return out;
+    std::lock_guard<std::mutex> lk(completedMutex);
+    return std::move(completedBuffer);
 }
 
 void ChunkWorkerPool::workerLoop() {
-    while (true) {
-        ChunkCoord coord;
+    if (backend != GenBackend::CPU) return;
+    while (workerRunning.load(std::memory_order_relaxed)) {
+        PriCoord item;
         {
-            std::unique_lock<std::mutex> lk(genQueueMutex);
-            genQueueCV.wait(lk, [this] {
+            std::unique_lock<std::mutex> lock(genQueueMutex);
+            genQueueCV.wait(lock, [this] {
                 return !genQueue.empty() || !workerRunning;
             });
-
-            if (!workerRunning && genQueue.empty())
-                break;
-
-            coord = genQueue.top().coord;
+            if (!workerRunning && genQueue.empty()) return;
+            item = genQueue.top();
             genQueue.pop();
         }
-        // Lock released before any generation work
 
-        if (backend == GenBackend::GPU)
-            launchGPU(coord);
-        else
-            generateCPU(coord);
+        generateCPU(item.coord);
     }
 }
 
@@ -80,82 +103,106 @@ void ChunkWorkerPool::generateCPU(const ChunkCoord& coord) {
     completedBuffer.push_back({ coord, std::move(chunk) });
 }
 
-void ChunkWorkerPool::launchGPU(const ChunkCoord& coord) {
-    GPUJob job;
-    job.coord = coord;
+void ChunkWorkerPool::launchGPU(const ChunkCoord& coord, int distSq) {
+    int idx;
 
-    if (cudaMalloc(&job.blocks, CHUNK_VOLUME * sizeof(BlockType)) != cudaSuccess) {
-        fprintf(stderr, "[ChunkWorkerPool] cudaMalloc failed for (%d,%d,%d)\n",
-                coord.x, coord.y, coord.z);
-        return;
+    if (!freeBufferIndices.empty()) {
+        idx = freeBufferIndices.back();
+        freeBufferIndices.pop_back();
+    } else {
+        GPUBuffer newBuf;
+
+        const size_t latCount = (size_t)CAVE_LX * CAVE_LY * CAVE_LZ;
+
+        cudaError_t err = cudaMalloc(&newBuf.d_blocks, CHUNK_VOLUME * sizeof(BlockType));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[GPU] cudaMalloc d_blocks failed: %s\n", cudaGetErrorString(err));
+            return;
+        }
+        err = cudaHostAlloc(&newBuf.h_blocks, CHUNK_VOLUME * sizeof(BlockType), cudaHostAllocDefault);
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[GPU] cudaHostAlloc failed: %s\n", cudaGetErrorString(err));
+            cudaFree(newBuf.d_blocks);
+            return;
+        }
+        err = cudaMalloc(&newBuf.d_cols, (size_t)CHUNK_SIZE * CHUNK_SIZE * sizeof(GpuColumn));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[GPU] cudaMalloc d_cols failed: %s\n", cudaGetErrorString(err));
+            cudaFreeHost(newBuf.h_blocks); cudaFree(newBuf.d_blocks);
+            return;
+        }
+        err = cudaMalloc(&newBuf.d_n1, latCount * sizeof(float));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[GPU] cudaMalloc d_n1 failed: %s\n", cudaGetErrorString(err));
+            cudaFree(newBuf.d_cols); cudaFreeHost(newBuf.h_blocks); cudaFree(newBuf.d_blocks);
+            return;
+        }
+        err = cudaMalloc(&newBuf.d_n2, latCount * sizeof(float));
+        if (err != cudaSuccess) {
+            fprintf(stderr, "[GPU] cudaMalloc d_n2 failed: %s\n", cudaGetErrorString(err));
+            cudaFree(newBuf.d_n1); cudaFree(newBuf.d_cols);
+            cudaFreeHost(newBuf.h_blocks); cudaFree(newBuf.d_blocks);
+            return;
+        }
+
+        cudaStreamCreateWithFlags(&newBuf.stream, cudaStreamNonBlocking);
+
+        idx = static_cast<int>(gpuBufferPool.size());
+        gpuBufferPool.push_back(newBuf);
     }
-    cudaStreamCreate(&job.stream);
 
-    launchChunkGenGPU(
-        job.blocks,
-        coord.x * CHUNK_SIZE,
-        coord.y * CHUNK_SIZE,
-        coord.z * CHUNK_SIZE,
-        job.stream
-    );
+    GPUBuffer& buf = gpuBufferPool[idx];
+    launchChunkGenGPU(buf.d_blocks, buf.d_cols, buf.d_n1, buf.d_n2,
+                      coord.x, coord.y, coord.z, buf.stream);
+    cudaMemcpyAsync(buf.h_blocks, buf.d_blocks,
+                    CHUNK_VOLUME * sizeof(BlockType),
+                    cudaMemcpyDeviceToHost, buf.stream);
 
-    {
-        std::lock_guard<std::mutex> lk(completedMutex); // reuse completedMutex — both are infrequent
-        gpuJobs.push_back(std::move(job));
-    }
+    gpuJobs.push_back({ coord, idx });
 }
 
 // pollGPU — called from the main thread inside ChunkDispatch
 void ChunkWorkerPool::pollGPU() {
     if (backend != GenBackend::GPU) return;
 
-    // Snapshot gpuJobs under the mutex, then release before memcpy
-    std::vector<GPUJob> snapshot;
-    {
-        std::lock_guard<std::mutex> lk(completedMutex);
-        snapshot = std::move(gpuJobs);
-        gpuJobs.clear();
-    }
-
-    std::vector<GPUJob> stillPending;
-
-    for (auto& job : snapshot) {
-        cudaError_t status = cudaStreamQuery(job.stream);
+    // ---- check steams for completion ----
+    for (auto it = gpuJobs.begin(); it != gpuJobs.end(); ) {
+        GPUBuffer& buf = gpuBufferPool[it->bufferIdx];
+        cudaError_t status = cudaStreamQuery(buf.stream);
 
         if (status == cudaSuccess) {
+            // Stream finished — copy device data to host and free
             Chunk chunk;
-            chunk.blocks.resize(CHUNK_VOLUME);
-            cudaMemcpy(
-                chunk.blocks.data(), job.blocks,
-                CHUNK_VOLUME * sizeof(BlockType),
-                cudaMemcpyDeviceToHost
-            );
-            cudaFree(job.blocks);
-            cudaStreamDestroy(job.stream);
-
-            std::lock_guard<std::mutex> lk(completedMutex);
-            completedBuffer.push_back({ job.coord, std::move(chunk) });
-
+            chunk.blocks.assign(buf.h_blocks, buf.h_blocks + CHUNK_VOLUME);
+            freeBufferIndices.push_back(it->bufferIdx);
+            {
+                std::lock_guard<std::mutex> lk(completedMutex);
+                completedBuffer.push_back({ it->coord, std::move(chunk) });
+            }
+            it = gpuJobs.erase(it);
         } else if (status == cudaErrorNotReady) {
-            stillPending.push_back(job);   // put back
-
+            ++it;
         } else {
-            fprintf(stderr, "[ChunkWorkerPool] GPU stream error on (%d,%d,%d): %s\n",
-                    job.coord.x, job.coord.y, job.coord.z,
+            fprintf(stderr, "[GPU] Stream error for chunk (%d,%d,%d): %s\n",
+                    it->coord.x, it->coord.y, it->coord.z,
                     cudaGetErrorString(status));
-            cudaFree(job.blocks);
-            cudaStreamDestroy(job.stream);
-            // Chunk simply never appears in completedBuffer
-            // ChunkRegistry stays in Generating state
-            // Future: could push a "failed" signal to retry
+            freeBufferIndices.push_back(it->bufferIdx);
+            it = gpuJobs.erase(it);
         }
     }
 
-    // Put unfinished jobs back
-    if (!stillPending.empty()) {
-        std::lock_guard<std::mutex> lk(completedMutex);
-        for (auto& j : stillPending)
-            gpuJobs.push_back(std::move(j));
+    // ---- launch staged jobs ----
+    std::vector<PriCoord> tolaunch;
+    {
+        std::lock_guard<std::mutex> lk(gpuStagingMutex);
+        while (!gpuStagingQueue.empty()) {
+            tolaunch.push_back(gpuStagingQueue.top());
+            gpuStagingQueue.pop();
+        }
+    }
+
+    for (const auto& item : tolaunch) {
+        launchGPU(item.coord, item.distSq);
     }
 }
 
@@ -166,9 +213,6 @@ WorkerPoolStats ChunkWorkerPool::getStats() const {
         std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(genQueueMutex));
         s.queueDepth = static_cast<uint32_t>(genQueue.size());
     }
-    {
-        std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(completedMutex));
-        s.gpuInFlight = static_cast<uint32_t>(gpuJobs.size());
-    }
+    s.gpuInFlight = static_cast<uint32_t>(gpuBufferPool.size() - freeBufferIndices.size());
     return s;
 }
