@@ -13,7 +13,16 @@ void launchChunkGenGPU(
     constexpr int W = CHUNK_SIZE;
 
     // Same chunk-level skip the CPU uses in generateTerrain.
-    const bool doCaves = (originY < (BASE_HEIGHT + (int)HEIGHT_SCALE + (int)MOUNTAIN_AMP + 20));
+    const int maxSurfaceY = BASE_HEIGHT
+                        + (int)HEIGHT_SCALE
+                        + (int)HYBRID_AMP
+                        + (int)RIDGE_AMP
+                        + 16;
+    if (originY > maxSurfaceY) {
+        cudaMemsetAsync(d_blocks, 0, CHUNK_VOLUME * sizeof(BlockType), stream);
+        return;
+    }
+    const bool doCaves = (originY < maxSurfaceY);
 
     // Phase 1 — column cache (1 thread per column)
     {

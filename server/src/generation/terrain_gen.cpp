@@ -29,7 +29,13 @@ Chunk generateTerrain(const ChunkCoord& coord) {
     buildColumnCache(colCache, originX, originZ);
 
     // Skip cave lattice for chunks entirely above the water+margin line
-    const bool doCaves = (originY < (BASE_HEIGHT + (int)HEIGHT_SCALE + (int)MOUNTAIN_AMP + 20));
+    const int maxSurfaceY = BASE_HEIGHT
+                        + (int)HEIGHT_SCALE
+                        + (int)HYBRID_AMP
+                        + (int)RIDGE_AMP
+                        + 16;
+    if (originY > maxSurfaceY) return chunk;    // all air
+    const bool doCaves = (originY < maxSurfaceY);
     if (doCaves) buildCaveLattice(caveLat, originX, originY, originZ);
 
     const float cf        = CAVE_BASE_FREQ;

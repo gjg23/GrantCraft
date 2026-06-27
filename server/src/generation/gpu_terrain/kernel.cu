@@ -4,6 +4,7 @@
 #include "generation/device_shared/noise.hpp"
 #include "generation/device_shared/spline.hpp"
 #include "generation/device_shared/biome_rules.hpp"
+#include "generation/device_shared/column_field.hpp"
 #include "world/chunk.hpp"
 
 #include <stdexcept>
@@ -28,58 +29,39 @@ int latIdx(int gy, int gz, int gx) {
 // =====================================================================
 __global__
 void columnKernel(GpuColumn* cols, int originX, int originZ) {
-    const TerrainParams& P = gTerrainParams;
-
     int lx = blockIdx.x * blockDim.x + threadIdx.x;
     int lz = blockIdx.y * blockDim.y + threadIdx.y;
     if (lx >= CHUNK_SIZE || lz >= CHUNK_SIZE) return;
-
+    
+    const TerrainParams& T = gTerrainParams;
+    ColumnParams P;
+    P.continentScale        = T.continentScale;
+    P.heightScale           = T.heightScale;
+    P.baseHeight            = T.baseHeight;
+    P.waterLevel            = T.waterLevel;
+    P.mfLacunarity          = T.mfLacunarity;
+    P.mfOctaves             = T.mfOctaves;
+    P.hybridH               = T.hybridH;
+    P.hybridOffset          = T.hybridOffset;
+    P.hybridScale           = T.hybridScale;
+    P.hybridAmp             = T.hybridAmp;
+    P.ridgeH                = T.ridgeH;
+    P.ridgeOffset           = T.ridgeOffset;
+    P.ridgeGain             = T.ridgeGain;
+    P.ridgeScale            = T.ridgeScale;
+    P.ridgeAmp              = T.ridgeAmp;
+    P.mountainMaskScale     = T.mountainMaskScale;
+    P.mountainMaskBias      = T.mountainMaskBias;
+    P.riverScale            = T.riverScale;
+    P.riverWidth            = T.riverWidth;
+    P.biomeScale            = T.biomeScale;
     float wx = (float)(originX + lx);
     float wz = (float)(originZ + lz);
-
-    // Continent
-    float continent = fbm2D(wx * P.continentScale, wz * P.continentScale, 12, P.heightLacunarity, P.heightGain);
-    float c = continent * 2.0f - 1.0f;
-    c = c * (1.0f + fabsf(c) * 0.8f);
-    c = fmaxf(-1.0f, fminf(1.0f, c));
-    float spline = heightSpline(c * 0.5f + 0.5f);
-
-    // Mountain
-    float mRaw     = fbm2D(wx * P.mountainScale, wz * P.mountainScale, 3, 2.0f, 0.5f);
-    float mountain = fmaxf(0.0f, mRaw - 0.4f) * (1.0f / 0.6f);
-    mountain = mountain * mountain;
-
-    // Detail
-    float detailFreq = P.heightBaseFreq * 4.0f;
-    float detail = fbm2D(wx * detailFreq + 200.0f, wz * detailFreq + 200.0f,
-                         4, 2.0f, 0.55f);
-    detail = (detail - 0.5f) * 18.0f;
-
-    // River
-    float riverRaw      = warpedNoise2D(wx * P.riverScale, wz * P.riverScale, 8.0f);
-    float riverDist     = fabsf(riverRaw - 0.5f) * 2.0f;
-    float riverStrength = fmaxf(0.0f, 1.0f - riverDist / P.riverWidth);
-    riverStrength       = riverStrength * riverStrength;
-    float riverFloor    = (float)P.waterLevel - 2.0f;
-
-    // Final surface Y (same expression order as the CPU)
-    float surfaceY = (float)P.baseHeight
-                   + spline   * P.heightScale
-                   + mountain * P.mountainAmp
-                   + detail;
-    surfaceY = surfaceY + riverStrength * (riverFloor - surfaceY);
-
-    // Biome
-    float temperature = fbm2D(wx * P.biomeScale + 1000.0f, wz * P.biomeScale + 1000.0f,
-                              3, 2.0f, 0.5f);
-    float humidity    = fbm2D(wx * P.biomeScale + 5000.0f, wz * P.biomeScale + 5000.0f,
-                              3, 2.0f, 0.5f);
-    temperature = fmaxf(0.0f, fminf(1.0f, temperature));
-    humidity    = fmaxf(0.0f, fminf(1.0f, humidity));
+    ColumnResult cr = computeColumn(wx, wz, P);
 
     GpuColumn gc;
-    gc.surfaceY = surfaceY;
-    gc.biome    = (int)classifyBiome(temperature, humidity);
+    gc.surfaceY = cr.surfaceY;
+    gc.biome    = (int)cr.biome;
     cols[lz * CHUNK_SIZE + lx] = gc;
 }
 
@@ -102,9 +84,9 @@ void caveLatticeKernel(float* n1, float* n2, int originX, int originY, int origi
 
     int i = latIdx(gy, gz, gx);
     n1[i] = warpedFbm3D(wx * wormFreq, wy * wormFreq, wz * wormFreq,
-                        P.caveOctaves, P.heightLacunarity, P.heightGain, 6.0f);
+                        P.caveOctaves, P.caveLacunarity, P.caveGain, 6.0f);
     n2[i] = warpedFbm3D(wx * wormFreq + 31.7f, wy * wormFreq + 17.3f, wz * wormFreq + 53.1f,
-                        P.caveOctaves, P.heightLacunarity, P.heightGain, 6.0f);
+                        P.caveOctaves, P.caveLacunarity, P.caveGain, 6.0f);
 }
 
 // =====================================================================
