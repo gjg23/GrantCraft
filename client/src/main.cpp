@@ -36,74 +36,29 @@
 #include "client_core/command_options.hpp"
 
 int main(int argc, char* argv[]) {
-    // -----------------------------------------------------------------------------
-    // Usage:
-    // Singleplayer
-    //   ./game_client
-    //   ./game_client --gpu
-    //   ./game_client --cpu
-    //
-    // Multiplayer
-    //   ./game_client <host> <port>
-    //   ./game_client <host> <port> --gpu
-    //   ./game_client <host> <port> --cpu
-    //
-    // Benchmark
-    //   ./game_client --bench
-    //   ./game_client --bench --host <host> --port <port>
-    //   ./game_client --bench --user <name>
-    //   ./game_client --bench --bench-radius <radius>
-    //
-    // Debug
-    //   ./game_client --debug
-    //   ./game_client --debug --host <host> --port <port>
-    //   ./game_client --debug --user <name>
-    //
-    // -----------------------------------------------------------------------------
-    
     CommandLineOptions opt;
+    if (!parse(argc, argv, opt)) return 1;
 
-    if (!ArgumentParser::parse(argc, argv, opt))
-        return 1;
+    bool singleplayer = !opt.isBench;
 
-    bool singleplayer = opt.singleplayer();
-
-    if (singleplayer)
-    {
-        opt.remoteHost = "127.0.0.1";
-        opt.remotePort = 7778;
-    }
-
-    if (!singleplayer && opt.remotePort == 0)
-    {
-        fprintf(stderr,
-                "Usage: %s [host port]\n",
-                argv[0]);
+    if (!singleplayer && opt.port == 0) {
+        fprintf(stderr, "Usage: %s [host port]\n", argv[0]);
         return 1;
     }
 
     if (opt.isBench)
     {
         BenchArgs ba;
-
         ba.mode = opt.benchMode;
         ba.radius = (opt.radius > 0) ? opt.radius : 4;
         ba.genCPU = !opt.benchGPU;
-        ba.genGPU = opt.benchGPU ||
-                    (opt.mode == ServerMode::GPU);
-
-        ba.port = singleplayer
-                    ? 7779
-                    : opt.remotePort;
-
+        ba.genGPU = opt.benchGPU || (opt.mode == ServerMode::GPU);
+        ba.port = singleplayer ? 7779 : opt.port;
         ba.players = opt.benchPlayers;
         ba.durationS = opt.benchDuration;
         ba.spawnRadius = opt.benchSpawnR;
         ba.stationaryS = opt.benchStationary;
-        ba.gpuServer =
-            (opt.mode == ServerMode::GPU) ||
-            opt.benchGPU;
-
+        ba.gpuServer = (opt.mode == ServerMode::GPU) || opt.benchGPU;
         ba.csvPath = opt.benchOutput;
 
         runBench(ba);
@@ -128,7 +83,7 @@ int main(int argc, char* argv[]) {
     LocalServer localServer;
     if (singleplayer) {
         printf("Starting local server.\n");
-        if (!localServer.start(opt.remotePort, opt.mode)) {
+        if (!localServer.start(opt.port, opt.mode)) {
             enet_deinitialize();
             fprintf(stderr, "Staring local server failed.\n");
             exit(EXIT_FAILURE);
@@ -136,7 +91,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ------------------------------------------------------------------
-    // Window + OpenGL setup (your existing Window class)
+    // Window + OpenGL setup
     // ------------------------------------------------------------------
     // Start glfw
     printf("Starting glfw.\n");
@@ -184,9 +139,9 @@ int main(int argc, char* argv[]) {
     // ------------------------------------------------------------------
     // Connect to the server (local or remote)
     // ------------------------------------------------------------------
-    printf("Connecting to %s:%u.\n", opt.remoteHost, opt.remotePort);
+    printf("Connecting to %s:%u.\n", opt.host, opt.port);
     Client client;
-    if (!client.connect(opt.remoteHost, opt.remotePort, "Player1")) {
+    if (!client.connect(opt.host, opt.port, "Player1")) {
         fprintf(stderr, "Could not connect to server.\n");
         exit(EXIT_FAILURE);
     }

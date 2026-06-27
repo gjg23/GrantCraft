@@ -95,8 +95,7 @@ private:
     std::vector<GPUJob>     gpuJobs;
     std::vector<GPUBuffer>  gpuBufferPool;
     std::vector<int>        freeBufferIndices;
-    int                     MAX_GPU_IN_FLIGHT = 8196;
-    void initGPUPool();
+    int MAX_GPU_IN_FLIGHT = 16;
 
     // ---- workers ----
     std::vector<std::thread> workers;

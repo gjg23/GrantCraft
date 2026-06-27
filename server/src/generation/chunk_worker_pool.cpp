@@ -28,10 +28,6 @@ void ChunkWorkerPool::init(int threadCount) {
         workers.emplace_back(&ChunkWorkerPool::workerLoop, this);
 }
 
-void ChunkWorkerPool::initGPUPool() {
-    return;
-}
-
 void ChunkWorkerPool::shutdown() {
     // cpu
     workerRunning = false;
@@ -152,8 +148,13 @@ void ChunkWorkerPool::launchGPU(const ChunkCoord& coord, int distSq) {
     }
 
     GPUBuffer& buf = gpuBufferPool[idx];
+
+    const int originX = coord.x * CHUNK_SIZE;
+    const int originY = coord.y * CHUNK_SIZE;
+    const int originZ = coord.z * CHUNK_SIZE;
+
     launchChunkGenGPU(buf.d_blocks, buf.d_cols, buf.d_n1, buf.d_n2,
-                      coord.x, coord.y, coord.z, buf.stream);
+                    originX, originY, originZ, buf.stream);
     cudaMemcpyAsync(buf.h_blocks, buf.d_blocks,
                     CHUNK_VOLUME * sizeof(BlockType),
                     cudaMemcpyDeviceToHost, buf.stream);
@@ -195,7 +196,8 @@ void ChunkWorkerPool::pollGPU() {
     std::vector<PriCoord> tolaunch;
     {
         std::lock_guard<std::mutex> lk(gpuStagingMutex);
-        while (!gpuStagingQueue.empty()) {
+        int capacity = MAX_GPU_IN_FLIGHT - static_cast<int>(gpuJobs.size());
+        while (capacity-- > 0 && !gpuStagingQueue.empty()) {
             tolaunch.push_back(gpuStagingQueue.top());
             gpuStagingQueue.pop();
         }

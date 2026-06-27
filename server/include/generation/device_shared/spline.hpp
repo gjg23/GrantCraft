@@ -7,13 +7,10 @@
 HD FINLINE float heightSpline(float t)
 {
     constexpr float xs[SPLINE_N] = {
-        0.0f, 0.15f, 0.35f, 0.50f,
-        0.65f, 0.80f, 1.0f
+        0.00f, 0.30f, 0.42f, 0.50f, 0.62f, 0.80f, 1.00f
     };
-
     constexpr float ys[SPLINE_N] = {
-        -1.0f, -0.55f, 0.4f,
-        0.8f, 0.9f, 0.99f, 1.0f
+        -1.00f, -0.55f, -0.08f, 0.10f, 0.35f, 0.70f, 1.00f
     };
 
     if (t <= xs[0])

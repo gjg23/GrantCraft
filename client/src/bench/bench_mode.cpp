@@ -106,7 +106,7 @@ static void printSummary(const BenchMetrics& m, int targetChunks) {
 void runBenchMode(const char* host, uint16_t port,
                   const char* username, int radiusOverride)
 {
-    int r = (radiusOverride > 0) ? radiusOverride : ClientCfg::RENDER_DISTANCE;
+    int r = (radiusOverride > 0) ? radiusOverride : WorldCfg::RENDER_DISTANCE;
     // cubic chunk count for the given radius
     int targetChunks = (2*r+1) * (2*r+1) * (2*r+1);
 

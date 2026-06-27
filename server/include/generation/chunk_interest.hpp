@@ -5,6 +5,7 @@
 
 #include "world/chunk.hpp"
 #include "ecs/registry.hpp"
+#include "settings/settings.hpp"
 
 #include <unordered_map>
 #include <unordered_set>
@@ -16,7 +17,7 @@ using EntityId = uint32_t;
 // Per-player chunk subscription state
 struct PlayerInterestState {
     ChunkCoord lastChunk = { INT_MAX, INT_MAX, INT_MAX };
-    int renderDistance = 48;
+    int renderDistance = WorldCfg::SIMULATION_DISTANCE;
  
     // The set of chunk coords this player is currently subscribed to
     std::unordered_set<ChunkCoord, ChunkCoordHash> subscribedChunks;

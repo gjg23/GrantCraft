@@ -16,14 +16,15 @@ void ChunkInterestSystem::computeDelta(
     std::vector<ChunkCoord>& toSubscribe,
     std::vector<ChunkCoord>& toUnsubscribe)
 {
-    const int r = state.renderDistance;
+    const int rH = state.renderDistance;
+    const int rV = std::min(state.renderDistance, WorldCfg::VERTICAL_SIM_DISTANCE);
  
     std::unordered_set<ChunkCoord, ChunkCoordHash> needed;
-    needed.reserve((2*r+1) * (2*r+1) * (2*r+1));
+    needed.reserve((2*rH+1) * (2*rH+1) * (2*rV+1));
  
-    for (int dx = -r; dx <= r; ++dx)
-    for (int dy = -r; dy <= r; ++dy)
-    for (int dz = -r; dz <= r; ++dz) {
+    for (int dx = -rH; dx <= rH; ++dx)
+    for (int dy = -rV; dy <= rV; ++dy)
+    for (int dz = -rH; dz <= rH; ++dz) {
         ChunkCoord c{ newCenter.x + dx, newCenter.y + dy, newCenter.z + dz };
         if (c.y < 0) continue;      // never generate below bedrock
         needed.insert(c);

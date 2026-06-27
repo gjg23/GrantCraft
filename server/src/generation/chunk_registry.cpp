@@ -1,6 +1,7 @@
 // server/src/generation/chunk_registry.cpp
 
 #include "generation/chunk_registry.hpp"
+#include "ecs/components.hpp"
 #include <algorithm>
 
 bool ChunkRegistry::has(const ChunkCoord& coord) const {
@@ -9,6 +10,7 @@ bool ChunkRegistry::has(const ChunkCoord& coord) const {
 
 void ChunkRegistry::request(const ChunkCoord& coord, EntityId subscriber) {
     auto& entry = entries[coord];
+    if (subscriber == NULL_ENTITY) return;
 
     // Avoid duplicate pendingRecipients
     auto& pend = entry.pendingRecipients;

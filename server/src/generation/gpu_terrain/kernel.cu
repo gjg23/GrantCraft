@@ -38,8 +38,7 @@ void columnKernel(GpuColumn* cols, int originX, int originZ) {
     float wz = (float)(originZ + lz);
 
     // Continent
-    float continent = fbm2D(wx * P.continentScale, wz * P.continentScale,
-                            12, P.heightLacunarity, P.heightGain);
+    float continent = fbm2D(wx * P.continentScale, wz * P.continentScale, 12, P.heightLacunarity, P.heightGain);
     float c = continent * 2.0f - 1.0f;
     c = c * (1.0f + fabsf(c) * 0.8f);
     c = fmaxf(-1.0f, fminf(1.0f, c));

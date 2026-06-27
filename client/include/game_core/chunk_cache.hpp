@@ -7,6 +7,7 @@
 // ------------------------------------------------------------------
 
 #include "world/chunk.hpp"
+#include "settings/settings.hpp"
 
 #include <unordered_map>
 #include <vector>
@@ -88,8 +89,8 @@ public:
 
 private:
     // defaults
-    int m_renderDist = 32;   
-    int m_simDist    = 48;
+    int m_renderDist = WorldCfg::RENDER_DISTANCE;
+    int m_simDist    = WorldCfg::SIMULATION_DISTANCE;
 
     ChunkCoord m_lastCenter{ INT_MAX, INT_MAX, INT_MAX };
     bool       m_forceRetier = true;

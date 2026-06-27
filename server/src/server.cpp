@@ -6,6 +6,7 @@
 #include "generation/gpu_terrain/kernel.cuh"
 #include "ecs/components.hpp"
 #include "net/debug_packets.hpp"
+#include "settings/settings.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -201,7 +202,7 @@ void Server::onConnect(ENetPeer* peer) {
     nc.playerId = net_nextPlayerId++;
 
     auto& ic = ecs.addInterest(e);
-    ic.renderDistance = 8;
+    ic.renderDistance = WorldCfg::RENDER_DISTANCE;
 
     chunkInterest.setRenderDistance(e, ic.renderDistance);
 
@@ -237,6 +238,7 @@ void Server::onDisconnect(ENetPeer* peer) {
 
 void Server::onReceive(ENetPeer* peer, ENetPacket* packet) {
     if (packet->dataLength < 1) return;
+    m_bytesRecvTick += static_cast<uint32_t>(packet->dataLength);
     auto type = static_cast<PacketType>(packet->data[0]);
 
     switch (type) {
