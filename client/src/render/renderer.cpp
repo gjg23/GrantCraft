@@ -206,6 +206,9 @@ void Renderer::removeChunk(const ChunkCoord& coord) {
 }
 
 void Renderer::cleanup() {
+    if (m_cleaned) return;
+    m_cleaned = true;
+    m_chunkRenderer.clear();
     glDeleteVertexArrays(1, &m_skyVAO);
     glDeleteVertexArrays(1, &m_cubeVAO);
     glDeleteBuffers(1, &m_cubeVBO);

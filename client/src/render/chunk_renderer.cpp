@@ -62,7 +62,12 @@ void GpuMesh::release() {
 // ---------------------------------------------------------------------------
 ChunkRenderer::ChunkRenderer()  = default;
 ChunkRenderer::~ChunkRenderer() {
+    clear();
+}
+
+void ChunkRenderer::clear() {
     for (auto& [coord, mesh] : m_gpuMeshes) mesh.release();
+    m_gpuMeshes.clear();
 }
 
 // ---------------------------------------------------------------------------

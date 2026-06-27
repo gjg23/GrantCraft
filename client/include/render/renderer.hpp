@@ -63,6 +63,7 @@ class Renderer {
 public:
     // atlas is a GL texture ID from loadTexture().
     void init(unsigned int skyShader, unsigned int blockShader, unsigned int atlas);
+    ~Renderer() { cleanup(); }
 
     void beginFrame();
     void renderSky  (const RenderContext& ctx, const glm::vec3& camPos);
@@ -115,4 +116,7 @@ private:
 
     GLuint compileCubeShader(); // compiles the hardcoded MVP shader
     GLuint compileShader(GLenum type, const char* src);
+
+    // no double clean
+    bool m_cleaned = false;
 };

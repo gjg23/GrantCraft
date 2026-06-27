@@ -26,9 +26,7 @@ struct CommandLineOptions {
 
     const char* benchOutput = nullptr;
 
-    bool singleplayer() const {
-        return host == nullptr;
-    }
+    bool singleplayer = true;
 };
 
 bool requireValue(int argc, int i) {
@@ -51,6 +49,8 @@ bool parse(int argc, char* argv[], CommandLineOptions& opt) {
             opt.isBench = true;
         else if (arg == "--debug")
             opt.isDebug = true;
+        else if (arg == "--server")
+            opt.singleplayer = false;
         else if (arg == "--host") {
             if (!requireValue(argc, i))
                 return false;

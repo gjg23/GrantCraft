@@ -36,6 +36,7 @@ class ChunkRenderer {
 public:
     ChunkRenderer();
     ~ChunkRenderer();
+    void clear();
 
     // Called when a new chunk packet arrives
     void onChunkReceived(const ChunkCoord& coord, std::vector<BlockType> blocks);
