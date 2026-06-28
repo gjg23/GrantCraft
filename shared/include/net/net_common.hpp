@@ -38,7 +38,6 @@ enum class PacketType : uint8_t {
 // ----- Packet payload structs -----
 // keep old data to memcpy into enet packet buffers
 // Client -> Server: first message after connection
-#pragma pack(push,1)    // keep alignment
 struct PKT_C_Join {
     PacketType type = PacketType::C_JOIN;
     char username[16];   // null-terminated, max 15 chars + null
@@ -77,7 +76,6 @@ struct PKT_S_ChunkData {
     uint32_t   dataSize;
     uint8_t    encoding;
 };
-#pragma pack(pop)
 
 enum class ChunkEncoding : uint8_t { Raw = 0, RLE = 1, Uniform = 2, LZ4 = 3 };
 
