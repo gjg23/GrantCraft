@@ -2,7 +2,7 @@
 // ------------------------------------------------------------------
 // client/include/render/chunk_mesher.hpp
 // ChunkMesher owns a single background thread that consumes a queue of
-// (coord, snapshot) pairs and produces ready-to-upload MeshData objects.
+// (coord, snapshot) pairs and produces ready-to-upload MeshData objects
 // ------------------------------------------------------------------
 
 #include <array>
@@ -12,24 +12,21 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <queue>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 #include <glm/glm.hpp>
+#include "world/chunk.hpp"
 
-#include "world/chunk.hpp"   // ChunkCoord, ChunkCoordHash, BlockType, CHUNK_SIZE
-
-// MeshData
 struct MeshData {
     std::vector<float>        verts;
     std::vector<unsigned int> idxs;
     ChunkCoord                coord{};
 };
 
-// MeshJob push into the worker queue
 struct MeshJob {
     ChunkCoord coord;
     uint32_t   generation;
@@ -43,41 +40,41 @@ struct MeshJob {
 // ---------------------------------------------------------------------------
 class ChunkMesher {
 public:
-    // callback invoked on the *calling* thread when drain() is polled —
-    // i.e. always on the main/render thread.  Safe to call glBufferData here.
     using ReadyCallback = std::function<void(MeshData&&)>;
 
     ChunkMesher();
+    explicit ChunkMesher(unsigned threads);
     ~ChunkMesher();
 
-    // Push a job.  If coord is already queued, bump its generation so the old
-    // job is discarded when the worker reaches it.
+    // Job cycle
     void enqueue(MeshJob job);
-
-    // Invalidate any queued / in-flight result for this chunk.
     void cancel(const ChunkCoord& coord); 
-
-    // Call once per frame from the render thread.
-    // Invokes cb for every MeshData that the worker has finished since last drain.
     void drain(ReadyCallback cb);
-
-    // Block until the worker queue is empty (used during initial load).
     void waitIdle();
+
+    size_t queueSize();
 
 private:
     void workerLoop();
     static MeshData buildMesh(const MeshJob& job);
 
+    struct JobCompare {
+        bool operator()(const MeshJob& a, const MeshJob& b) const {
+            return a.priorityDistSq > b.priorityDistSq;
+        }
+    };
+
     // --- shared between main and worker ---
     std::mutex              m_inMutex;
     std::condition_variable m_inCV;
-    std::queue<MeshJob>     m_inQueue;
+    std::vector<MeshJob>    m_inHeap;
     // generation tracking: coord -> latest generation enqueued
     std::unordered_map<ChunkCoord, uint32_t, ChunkCoordHash> m_generation;
+    int                     m_inFlight = 0;
 
     std::mutex           m_outMutex;
     std::queue<MeshData> m_outQueue;
 
     std::atomic<bool> m_running{false};
-    std::thread       m_worker;
+    std::vector<std::thread> m_workers;
 };

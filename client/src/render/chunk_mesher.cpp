@@ -153,9 +153,17 @@ MeshData ChunkMesher::buildMesh(const MeshJob& job) {
 // ---------------------------------------------------------------------------
 // ChunkMesher lifecycle
 // ---------------------------------------------------------------------------
-ChunkMesher::ChunkMesher() {
+ChunkMesher::ChunkMesher()
+    : ChunkMesher(
+        std::max(1u, std::thread::hardware_concurrency() > 1
+        ? std::thread::hardware_concurrency() - 1 
+        : 1u)
+    ) {}
+
+ChunkMesher::ChunkMesher(unsigned threads) {
     m_running = true;
-    m_worker  = std::thread(&ChunkMesher::workerLoop, this);
+    for (unsigned i = 0; i < threads; ++i)
+        m_workers.emplace_back(&ChunkMesher::workerLoop, this);
 }
 
 ChunkMesher::~ChunkMesher() {
@@ -163,23 +171,21 @@ ChunkMesher::~ChunkMesher() {
         std::lock_guard<std::mutex> lk(m_inMutex);
         m_running = false;
     }
-    m_inCV.notify_one();
-    if (m_worker.joinable()) m_worker.join();
+    m_inCV.notify_all();
+    for (auto& t : m_workers)
+        if (t.joinable()) t.join();
 }
 
 void ChunkMesher::enqueue(MeshJob job) {
     std::lock_guard<std::mutex> lk(m_inMutex);
-    // Bump generation so any stale job for this coord is skipped
-    uint32_t gen = ++m_generation[job.coord];
-    job.generation = gen;
-    m_inQueue.push(std::move(job));
+    job.generation = ++m_generation[job.coord];
+    m_inHeap.push_back(std::move(job));
+    std::push_heap(m_inHeap.begin(), m_inHeap.end(), JobCompare{});
     m_inCV.notify_one();
 }
 
 void ChunkMesher::cancel(const ChunkCoord& coord) {
     std::lock_guard<std::mutex> lk(m_inMutex);
-
-    // Invalidate any queued or in-flight results for this coord.
     ++m_generation[coord];
 }
 
@@ -199,10 +205,15 @@ void ChunkMesher::waitIdle() {
     while (true) {
         {
             std::lock_guard<std::mutex> lk(m_inMutex);
-            if (m_inQueue.empty()) return;
+            if (m_inHeap.empty() && m_inFlight == 0) return;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+}
+
+size_t ChunkMesher::queueSize() {
+    std::lock_guard<std::mutex> lk(m_inMutex);
+    return m_inHeap.size() + static_cast<size_t>(m_inFlight);
 }
 
 void ChunkMesher::workerLoop() {
@@ -210,18 +221,19 @@ void ChunkMesher::workerLoop() {
         MeshJob job;
         {
             std::unique_lock<std::mutex> lk(m_inMutex);
-            m_inCV.wait(lk, [this]{ return !m_inQueue.empty() || !m_running; });
-            if (!m_running && m_inQueue.empty()) return;
-            job = std::move(m_inQueue.front());
-            m_inQueue.pop();
-        }
+            m_inCV.wait(lk, [this]{ return !m_inHeap.empty() || !m_running; });
+            if (!m_running && m_inHeap.empty()) return;
 
-        // Discard stale jobs (a newer enqueue superseded this one)
-        {
-            std::lock_guard<std::mutex> lk(m_inMutex);
+            std::pop_heap(m_inHeap.begin(), m_inHeap.end(), JobCompare{});
+            job = std::move(m_inHeap.back());
+            m_inHeap.pop_back();
+
+            // Skip if a newer enqueue/cancel superseded this job.
             auto it = m_generation.find(job.coord);
             if (it != m_generation.end() && it->second != job.generation)
                 continue;
+
+            ++m_inFlight;
         }
 
         MeshData result = buildMesh(job);
@@ -229,6 +241,10 @@ void ChunkMesher::workerLoop() {
         {
             std::lock_guard<std::mutex> lk(m_outMutex);
             m_outQueue.push(std::move(result));
+        }
+        {
+            std::lock_guard<std::mutex> lk(m_inMutex);
+            --m_inFlight;
         }
     }
 }
