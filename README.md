@@ -1,2 +1,6 @@
-# GrantCraft
-A Minecraft-Style game to play with my fwends
+# Computer Science Masters Project
+
+Requirements to compile:
+CUDA Toolkit
+lz4
+OpenGL

@@ -98,6 +98,7 @@ private:
     uint32_t sendChunkToPeer(ENetPeer* peer, const ChunkCoord& coord);
     void sendLoadedChunksToPeer(ENetPeer* peer, EntityId id);
     void broadcastPlayerStates();
+    ENetPacket* buildChunkPacket(const ChunkCoord& coord);
 
     // Debug stats
     uint32_t m_tickCount       = 0;

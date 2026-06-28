@@ -44,6 +44,7 @@ target_link_libraries(chunk_core PUBLIC
     gpu_terrain
     CUDA::cudart
 )
+target_link_libraries(chunk_core PRIVATE lz4) # compression for chunks
 set_target_properties(chunk_core PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
 )

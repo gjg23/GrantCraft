@@ -12,6 +12,7 @@
 #include <cstring>
 #include <chrono>
 #include <algorithm>
+#include <lz4.h>
 
 
 // ------------------------------------------------------------------
@@ -385,56 +386,62 @@ void Server::systemChunkDispatch(float dt) {
 
 void Server::systemNetworkFlush(float dt) {
     // Chunk sends — bounded per tick to avoid saturating the link
-    constexpr uint32_t PEER_BYTE_BUDGET = 256u * 1024u;
+    constexpr uint32_t PEER_BYTE_BUDGET = 32u * 1024u * 1024u;  // TODO: make this adaptive
 
-    struct PendingSend {
+    struct CoordWork {
         ChunkCoord coord;
-        EntityId   recipient;
-        ENetPeer*  peer;
-        int        distSq;
+        std::vector<EntityId> recipients;
+        int minDistSq;
     };
-    std::vector<PendingSend> pendingSends;
 
     auto sendWork = chunkRegistry.collectSendWork();
-    for (auto& work : sendWork) {
-        for (EntityId id : work.recipients) {
-            auto* nc  = ecs.network(id);
-            if (!nc) continue;
+    std::vector<CoordWork> work;
+    work.reserve(sendWork.size());
 
-            // Compute squared XZ distance from this player to this chunk
-            int distSq = 0;
+    for (auto& sw : sendWork) {
+        int best = INT_MAX;
+        for (EntityId id : sw.recipients) {
             if (auto* pos = ecs.position(id)) {
-                int dx = work.coord.x - static_cast<int>(std::floor(pos->pos.x / CHUNK_SIZE));
-                int dz = work.coord.z - static_cast<int>(std::floor(pos->pos.z / CHUNK_SIZE));
-                distSq = dx*dx + dz*dz;
+                int dx = sw.coord.x - (int)std::floor(pos->pos.x / CHUNK_SIZE);
+                int dy = sw.coord.y - (int)std::floor(pos->pos.y / CHUNK_SIZE);
+                int dz = sw.coord.z - (int)std::floor(pos->pos.z / CHUNK_SIZE);
+                best = std::min(best, dx*dx + dy*dy + dz*dz);
             }
-            pendingSends.push_back({ work.coord, id, nc->peer, distSq });
         }
+        work.push_back({ sw.coord, std::move(sw.recipients), best });
     }
 
     // Nearest chunks first
-    std::sort(pendingSends.begin(), pendingSends.end(),
-        [](const PendingSend& a, const PendingSend& b) {
-            return a.distSq < b.distSq;
-        });
+    std::sort(work.begin(), work.end(),
+        [](const CoordWork& a, const CoordWork& b){ return a.minDistSq < b.minDistSq; });
 
-    // Send, gated by per-peer byte budget
-    std::unordered_map<ENetPeer*, uint32_t> peerBytesSent;
-    peerBytesSent.reserve(peerToEntity.size());
+    std::unordered_map<ENetPeer*, uint32_t> peerBytes;
+    peerBytes.reserve(peerToEntity.size());
 
-    for (auto& ps : pendingSends) {
-        uint32_t& used = peerBytesSent[ps.peer];
-        if (used >= PEER_BYTE_BUDGET) continue;
+    for (auto& w : work) {
+        // compress once
+        ENetPacket* pkt = buildChunkPacket(w.coord);
+        if (!pkt) continue;
+        uint32_t pktBytes = static_cast<uint32_t>(pkt->dataLength);
 
-        uint32_t sent = sendChunkToPeer(ps.peer, ps.coord);
-        if (sent == 0) continue;
+        bool anySent = false;
+        for (EntityId id : w.recipients) {
+            auto* nc = ecs.network(id);
+            if (!nc) continue;
+            uint32_t& used = peerBytes[nc->peer];
+            if (used >= PEER_BYTE_BUDGET) continue;
 
-        chunkRegistry.markSentTo(ps.coord, ps.recipient);
-        used            += sent;
-        m_bytesSentTick += sent;
+            enet_peer_send(nc->peer, CHANNEL_RELIABLE, pkt);
+            used            += pktBytes;
+            m_bytesSentTick += pktBytes;
+            chunkRegistry.markSentTo(w.coord, id);
+            anySent = true;
+        }
+        if (!anySent) enet_packet_destroy(pkt); // free
     }
 
     broadcastPlayerStates();
+    enet_host_flush(net_host);
 }
 
 
@@ -460,7 +467,7 @@ uint32_t Server::sendChunkToPeer(ENetPeer* peer, const ChunkCoord& coord) {
     hdr.cx         = coord.x;
     hdr.cy         = coord.y;
     hdr.cz         = coord.z;
-    hdr.compressed = useCompressed ? 1u : 0u;
+    hdr.encoding   = static_cast<uint8_t>(useCompressed ? ChunkEncoding::RLE : ChunkEncoding::Raw);
     hdr.dataSize   = payloadSz;
 
     uint32_t totalSize = static_cast<uint32_t>(sizeof(hdr)) + payloadSz;
@@ -504,4 +511,63 @@ void Server::broadcastPlayerStates() {
         ENetPacket* ep = makePacket(pkt, 0);
         enet_peer_send(peer, CHANNEL_UNRELIABLE, ep);
     }
+}
+
+// Build the chunk packet ONCE (compress once). Caller sends to N peers.
+ENetPacket* Server::buildChunkPacket(const ChunkCoord& coord) {
+    Chunk* chunk = world.getChunk(coord);
+    if (!chunk) return nullptr;
+
+    const BlockType* src = chunk->blocks.data();
+    const uint32_t   N   = CHUNK_VOLUME;
+    const uint32_t   raw = N * static_cast<uint32_t>(sizeof(BlockType));
+
+    PKT_S_ChunkData hdr;
+    hdr.cx = coord.x; hdr.cy = coord.y; hdr.cz = coord.z;
+
+    auto packetFrom = [&](ChunkEncoding enc, const uint8_t* payload, uint32_t size) {
+        hdr.encoding = static_cast<uint8_t>(enc);
+        hdr.dataSize = size;
+        uint32_t total = static_cast<uint32_t>(sizeof(hdr)) + size;
+        ENetPacket* pkt = enet_packet_create(nullptr, total, ENET_PACKET_FLAG_RELIABLE);
+        memcpy(pkt->data, &hdr, sizeof(hdr));
+        if (size) memcpy(pkt->data + sizeof(hdr), payload, size);
+        return pkt;
+    };
+
+    // All same block
+    bool uniform = true;
+    for (uint32_t i = 1; i < N; ++i)
+        if (src[i] != src[0]) { uniform = false; break; }
+    if (uniform) {
+        uint8_t v = static_cast<uint8_t>(src[0]);
+        return packetFrom(ChunkEncoding::Uniform, &v, 1);
+    }
+
+    // LZ4
+    constexpr uint32_t CHUNK_RAW_BYTES = CHUNK_VOLUME * sizeof(BlockType);
+    constexpr uint32_t CHUNK_LZ4_BOUND = lz4CompressBound(CHUNK_RAW_BYTES);
+
+    std::array<uint8_t, CHUNK_LZ4_BOUND> lz4Buf;
+    int lz4Size = LZ4_compress_default(reinterpret_cast<const char*>(src),
+                                    reinterpret_cast<char*>(lz4Buf.data()),
+                                    static_cast<int>(CHUNK_RAW_BYTES),
+                                    static_cast<int>(CHUNK_LZ4_BOUND));
+
+    // RLE fallback
+    const uint32_t maxRle = N * static_cast<uint32_t>(sizeof(uint16_t) + sizeof(BlockType));
+    std::vector<uint8_t> rleBuf(maxRle);
+    uint32_t rleSize = rleEncodeBlocks(src, N, rleBuf.data(), maxRle);
+
+    // Pick smallest
+    uint32_t bestSize = raw;
+    ChunkEncoding bestEnc = ChunkEncoding::Raw;
+    const uint8_t* bestPtr = reinterpret_cast<const uint8_t*>(src);
+    if (lz4Size > 0 && static_cast<uint32_t>(lz4Size) < bestSize) {
+        bestSize = lz4Size; bestEnc = ChunkEncoding::LZ4; bestPtr = lz4Buf.data();
+    }
+    if (rleSize > 0 && rleSize < bestSize) {
+        bestSize = rleSize; bestEnc = ChunkEncoding::RLE; bestPtr = rleBuf.data();
+    }
+    return packetFrom(bestEnc, bestPtr, bestSize);
 }

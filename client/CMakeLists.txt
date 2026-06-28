@@ -71,6 +71,7 @@ target_link_libraries(client_core PRIVATE
     renderer
     glad
     enet
+    lz4
     ${GLFW_TARGET}
 )
 
