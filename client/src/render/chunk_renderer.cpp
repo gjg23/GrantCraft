@@ -3,6 +3,31 @@
 
 #include <glm/gtc/type_ptr.hpp>
 
+void ChunkRenderer::touch(const ChunkCoord& c) {
+    auto it = m_lruPos.find(c);
+    if (it != m_lruPos.end()) m_lru.erase(it->second);
+    m_lru.push_front(c);
+    m_lruPos[c] = m_lru.begin();
+}
+
+void ChunkRenderer::evictIfNeeded() {
+    while (m_gpuMeshes.size() > m_maxResidentMeshes && !m_lru.empty()) {
+        ChunkCoord victim = m_lru.back();
+        m_lru.pop_back();
+        m_lruPos.erase(victim);
+
+        auto mit = m_gpuMeshes.find(victim);
+        if (mit != m_gpuMeshes.end()) {
+            mit->second.release();
+            m_gpuMeshes.erase(mit);
+        }
+        m_visibleChunks.erase(victim);
+        m_chunkData.erase(victim);
+
+        if (onMeshEvicted) onMeshEvicted(victim);
+    }
+}
+
 // Direction table
 const ChunkCoord ChunkRenderer::kDirs[6] = {
     { 1, 0, 0}, {-1, 0, 0},
@@ -98,8 +123,8 @@ void ChunkRenderer::onChunkRemoved(const ChunkCoord& coord) {
         std::lock_guard<std::mutex> lk(m_dataMutex);
 
         m_mesher.cancel(coord);
-
         m_visibleChunks.erase(coord);
+
         m_chunkData.erase(coord);
 
         for (const auto& d : kDirs) {
@@ -109,52 +134,51 @@ void ChunkRenderer::onChunkRemoved(const ChunkCoord& coord) {
             }
         }
     }
-
-    auto it = m_gpuMeshes.find(coord);
-    if (it != m_gpuMeshes.end()) {
-        it->second.release();
-        m_gpuMeshes.erase(it);
-    }
 }
 
 // ---------------------------------------------------------------------------
 // render - main thread, called every frame
 // ---------------------------------------------------------------------------
 void ChunkRenderer::render(const glm::mat4& proj, const glm::mat4& view) {
-    // Drain the mesher
     m_mesher.drain([this](MeshData&& md) {
         if (md.idxs.empty()) {
-            // Empty mesh
             auto it = m_gpuMeshes.find(md.coord);
             if (it != m_gpuMeshes.end()) {
                 it->second.release();
                 m_gpuMeshes.erase(it);
             }
+            // Also remove from LRU so evictIfNeeded doesn't trip on a
+            // coord that has no mesh
+            auto lit = m_lruPos.find(md.coord);
+            if (lit != m_lruPos.end()) {
+                m_lru.erase(lit->second);
+                m_lruPos.erase(lit);
+            }
             return;
         }
         m_gpuMeshes[md.coord].upload(md.verts, md.idxs);
+        touch(md.coord);   // ← mark as recently used
     });
+
+    evictIfNeeded();       // ← shed oldest meshes if over budget
+
     std::unordered_set<ChunkCoord, ChunkCoordHash> visibleSnapshot;
     {
         std::lock_guard<std::mutex> lk(m_dataMutex);
         visibleSnapshot = m_visibleChunks;
     }
 
-    // Build frustum from current camera
     Frustum frustum = Frustum::fromMatrix(proj * view);
 
-    // Draw every chunk whose AABB intersects the frustum
     for (auto& [coord, mesh] : m_gpuMeshes) {
         if (!visibleSnapshot.count(coord)) continue;
-        
-        // AABB in world space
+
         glm::vec3 minP{
             static_cast<float>(coord.x * CHUNK_SIZE),
             static_cast<float>(coord.y * CHUNK_SIZE),
             static_cast<float>(coord.z * CHUNK_SIZE)
         };
         glm::vec3 maxP = minP + glm::vec3(static_cast<float>(CHUNK_SIZE));
-
         if (!frustum.intersectsAABB(minP, maxP)) continue;
 
         mesh.draw();

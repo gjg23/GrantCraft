@@ -88,6 +88,15 @@ public:
  
     void cleanup();
 
+    bool hasMesh(ChunkCoord coord) { return m_chunkRenderer.hasMesh(coord); }
+
+    void setMeshEvictedCallback(std::function<void(const ChunkCoord&)> cb) {
+        m_chunkRenderer.onMeshEvicted = std::move(cb);
+    }
+    bool hasChunkMesh(const ChunkCoord& c) const {
+        return m_chunkRenderer.hasMesh(c);
+    }
+
 private:
     // Programs
     GLuint m_skyShader   = 0;

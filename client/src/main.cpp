@@ -124,6 +124,16 @@ int main(int argc, char* argv[]) {
     std::unordered_map<uint32_t, RemotePlayer> remotePlayers;
     
     // ------------------------------------------------------------------
+    // Connect to the server (local or remote)
+    // ------------------------------------------------------------------
+    printf("Connecting to %s:%u.\n", opt.host, opt.port);
+    Client client;
+    if (!client.connect(opt.host, opt.port, "Player1")) {
+        fprintf(stderr, "Could not connect to server.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // ------------------------------------------------------------------
     // renderer
     // ------------------------------------------------------------------
     unsigned int skyShader   = loadShader("shaders/sky.vert",   "shaders/sky.frag");
@@ -136,15 +146,9 @@ int main(int argc, char* argv[]) {
     DayNightCycle dayNight;
     renderer.init(skyShader, blockShader, loadTexture("textures/atlas_2.png"));
 
-    // ------------------------------------------------------------------
-    // Connect to the server (local or remote)
-    // ------------------------------------------------------------------
-    printf("Connecting to %s:%u.\n", opt.host, opt.port);
-    Client client;
-    if (!client.connect(opt.host, opt.port, "Player1")) {
-        fprintf(stderr, "Could not connect to server.\n");
-        exit(EXIT_FAILURE);
-    }
+    renderer.setMeshEvictedCallback([&client](const ChunkCoord& c) {
+        client.markRendererReleased(c);
+    });
 
     // ------------------------------------------------------------------
     // Main loop
@@ -167,30 +171,31 @@ int main(int argc, char* argv[]) {
         );
 
         // Apply movement-driven chunk transitions for already-cached chunks.
-
-        // 1) Chunks that must become renderer-resident again
+        // 1) Chunks that need a new or restored mesh
         for (const auto& coord : tierDelta.toLoadRenderer) {
             std::vector<BlockType> blocks;
             if (client.copyChunkBlocks(coord, blocks)) {
                 renderer.submitChunk(coord, std::move(blocks));
                 client.markRendererResident(coord);
+                renderer.setChunkVisible(coord, true);
             }
         }
 
         // 2) Chunks entering render distance: show
         for (const auto& coord : tierDelta.toShow) {
-            renderer.setChunkVisible(coord, true);
+            if (renderer.hasMesh(coord)) {
+                renderer.setChunkVisible(coord, true);
+            }
         }
 
-        // 3) Chunks leaving render distance but still inside simulation distance: hide only
+        // 3) Leaving render distance but still in simulation distance: hide only
         for (const auto& coord : tierDelta.toHide) {
             renderer.setChunkVisible(coord, false);
         }
 
-        // 4) Chunks leaving simulation distance entirely: drop renderer-side storage
+        // 4) Leaving simulation distance entirely: free block data + hide
         for (const auto& coord : tierDelta.toDropRenderer) {
             renderer.removeChunk(coord);
-            client.markRendererReleased(coord);
         }
 
         // Send predicted position to server

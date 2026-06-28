@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 #include <unordered_set>
+#include <list>
 
 #include <glad.h>
 #include <glm/glm.hpp>
@@ -51,6 +52,14 @@ public:
     // Block until the mesh worker is idle (used during initial load)
     void waitIdle() { m_mesher.waitIdle(); }
 
+    bool hasMesh(const ChunkCoord& c) const {
+        return m_gpuMeshes.count(c) > 0;
+    }
+
+    // Fired when the LRU evicts a mesh from GPU memory.
+    // Wire this up in the client to call markRendererReleased on the cache.
+    std::function<void(const ChunkCoord&)> onMeshEvicted;
+
 private:
     // Snapshot the neighbour block data
     std::array<std::shared_ptr<const std::vector<BlockType>>, 6> 
@@ -74,4 +83,9 @@ private:
 
     // GPU meshes
     std::unordered_map<ChunkCoord, GpuMesh, ChunkCoordHash> m_gpuMeshes;
+    std::list<ChunkCoord> m_lru;  // most-recently-touched
+    std::unordered_map<ChunkCoord, std::list<ChunkCoord>::iterator, ChunkCoordHash> m_lruPos;
+    size_t m_maxResidentMeshes = 4096;  // vram
+    void touch(const ChunkCoord& c);
+    void evictIfNeeded();
 };
