@@ -164,6 +164,13 @@ int main(int argc, char* argv[]) {
         input.update(win.handle, localPlayer, win.isCursorLocked());
         if (input.escapePressed) win.toggleCursor();
 
+        ChunkCoord playerChunk{
+            static_cast<int>(std::floor(localPlayer.state.position.x / CHUNK_SIZE)),
+            static_cast<int>(std::floor(localPlayer.state.position.y / CHUNK_SIZE)),
+            static_cast<int>(std::floor(localPlayer.state.position.z / CHUNK_SIZE))
+        };
+        renderer.setPlayerChunk(playerChunk);
+
         auto tierDelta = client.updatePlayerChunk(
             localPlayer.state.position.x,
             localPlayer.state.position.y,

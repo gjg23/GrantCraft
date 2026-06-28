@@ -32,12 +32,10 @@ struct MeshData {
 // MeshJob push into the worker queue
 struct MeshJob {
     ChunkCoord coord;
-    uint32_t   generation; // bumped each time the coord is re-queued
-
-    // Block data snapshots (center + 6 face neighbours, null if absent)
+    uint32_t   generation;
+    int        priorityDistSq;
     std::shared_ptr<const std::vector<BlockType>> center;
     std::array<std::shared_ptr<const std::vector<BlockType>>, 6> neighbours;
-    // neighbours[0]=+X, [1]=-X, [2]=+Y, [3]=-Y, [4]=+Z, [5]=-Z
 };
 
 // ---------------------------------------------------------------------------

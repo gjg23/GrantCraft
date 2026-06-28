@@ -208,10 +208,18 @@ void ChunkRenderer::enqueueMesh(const ChunkCoord& coord) {
     if (it == m_chunkData.end()) return;
 
     MeshJob job;
-    job.coord       = coord;
-    job.generation  = 0;
-    job.center      = it->second;
-    job.neighbours  = snapshotNeighbours(coord);
-
+    job.coord          = coord;
+    job.generation     = 0;
+    job.priorityDistSq = distSqToPlayer(coord);
+    job.center         = it->second;
+    job.neighbours     = snapshotNeighbours(coord);
     m_mesher.enqueue(std::move(job));
+}
+
+int ChunkRenderer::distSqToPlayer(const ChunkCoord& c) const {
+    // m_dataMutex must already be held (reads m_playerChunk)
+    int dx = c.x - m_playerChunk.x;
+    int dy = c.y - m_playerChunk.y;
+    int dz = c.z - m_playerChunk.z;
+    return dx*dx + dy*dy + dz*dz;
 }

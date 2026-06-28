@@ -97,6 +97,10 @@ public:
         return m_chunkRenderer.hasMesh(c);
     }
 
+    void setPlayerChunk(const ChunkCoord& c) {
+        m_chunkRenderer.setPlayerChunk(c);
+    }
+
 private:
     // Programs
     GLuint m_skyShader   = 0;

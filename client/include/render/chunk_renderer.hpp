@@ -60,6 +60,11 @@ public:
     // Wire this up in the client to call markRendererReleased on the cache.
     std::function<void(const ChunkCoord&)> onMeshEvicted;
 
+    void setPlayerChunk(const ChunkCoord& c) {
+        std::lock_guard<std::mutex> lk(m_dataMutex);
+        m_playerChunk = c;
+    }
+
 private:
     // Snapshot the neighbour block data
     std::array<std::shared_ptr<const std::vector<BlockType>>, 6> 
@@ -67,6 +72,9 @@ private:
 
     // Enqueue a mesh job for coord
     void enqueueMesh(const ChunkCoord& coord);
+
+    // player pos
+    ChunkCoord m_playerChunk{ 0, 0, 0 };
 
     // Direction table
     static const ChunkCoord kDirs[6];
@@ -88,4 +96,7 @@ private:
     size_t m_maxResidentMeshes = 4096;  // vram
     void touch(const ChunkCoord& c);
     void evictIfNeeded();
+
+    // helper 
+    int distSqToPlayer(const ChunkCoord& c) const;
 };
