@@ -386,7 +386,7 @@ void Server::systemChunkDispatch(float dt) {
 
 void Server::systemNetworkFlush(float dt) {
     // Chunk sends — bounded per tick to avoid saturating the link
-    constexpr uint32_t PEER_BYTE_BUDGET = 32u * 1024u * 1024u;  // TODO: make this adaptive
+    constexpr uint32_t MAX_CHUNKS_PER_PEER_PER_TICK = 24;   // make adaptive
 
     struct CoordWork {
         ChunkCoord coord;
@@ -415,8 +415,8 @@ void Server::systemNetworkFlush(float dt) {
     std::sort(work.begin(), work.end(),
         [](const CoordWork& a, const CoordWork& b){ return a.minDistSq < b.minDistSq; });
 
-    std::unordered_map<ENetPeer*, uint32_t> peerBytes;
-    peerBytes.reserve(peerToEntity.size());
+    std::unordered_map<ENetPeer*, uint32_t> peerCount;
+    peerCount.reserve(peerToEntity.size());
 
     for (auto& w : work) {
         // compress once
@@ -428,11 +428,11 @@ void Server::systemNetworkFlush(float dt) {
         for (EntityId id : w.recipients) {
             auto* nc = ecs.network(id);
             if (!nc) continue;
-            uint32_t& used = peerBytes[nc->peer];
-            if (used >= PEER_BYTE_BUDGET) continue;
+            uint32_t& cnt = peerCount[nc->peer];
+            if (cnt >= MAX_CHUNKS_PER_PEER_PER_TICK) continue;  // retry next tick
 
             enet_peer_send(nc->peer, CHANNEL_RELIABLE, pkt);
-            used            += pktBytes;
+            ++cnt;
             m_bytesSentTick += pktBytes;
             chunkRegistry.markSentTo(w.coord, id);
             anySent = true;

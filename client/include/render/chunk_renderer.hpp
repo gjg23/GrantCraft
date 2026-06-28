@@ -10,6 +10,11 @@
 #include <vector>
 #include <unordered_set>
 #include <list>
+#include <queue>
+#include <chrono>
+#include <algorithm>
+#include <functional>
+#include <cstdint>
 
 #include <glad.h>
 #include <glm/glm.hpp>
@@ -17,6 +22,7 @@
 #include "world/chunk.hpp"
 #include "render/chunk_mesher.hpp"
 #include "render/frustum.hpp"
+#include "settings/settings.hpp"
 
 // ---------------------------------------------------------------------------
 // GpuMesh — per-chunk VAO/VBO/EBO on the GPU (main thread only)
@@ -40,10 +46,7 @@ public:
 
     // Called when a new chunk packet arrives
     void onChunkReceived(const ChunkCoord& coord, std::vector<BlockType> blocks);
-
     void setChunkVisible(const ChunkCoord& coord, bool visible);
-
-    // Called when a chunk is unloaded (main thread only currently)
     void onChunkRemoved(const ChunkCoord& coord);
 
     // Call once per frame from the render thread
@@ -56,13 +59,13 @@ public:
         return m_gpuMeshes.count(c) > 0;
     }
 
-    // Fired when the LRU evicts a mesh from GPU memory.
-    // Wire this up in the client to call markRendererReleased on the cache.
     std::function<void(const ChunkCoord&)> onMeshEvicted;
 
-    void setPlayerChunk(const ChunkCoord& c) {
+    void setPlayerChunk(const ChunkCoord& c);
+
+    void setRenderRadius(int r) {
         std::lock_guard<std::mutex> lk(m_dataMutex);
-        m_playerChunk = c;
+        m_renderRadius = std::max(0, r);
     }
 
 private:
@@ -73,30 +76,48 @@ private:
     // Enqueue a mesh job for coord
     void enqueueMesh(const ChunkCoord& coord);
 
+    // ---- eligibility / scheduling ----
+    void    pumpMeshJobs();
+    void    markDirty(const ChunkCoord& c);
+    void    refreshRenderRegion();
+    bool    withinRenderRange(const ChunkCoord& c) const;
+    uint8_t neighborCount(const ChunkCoord& c) const;        // cached lookup
+    uint8_t countPresentNeighbors(const ChunkCoord& c) const; // recount from data
+
     // player pos
     ChunkCoord m_playerChunk{ 0, 0, 0 };
-
-    // Direction table
     static const ChunkCoord kDirs[6];
 
     // Shared data: main thread + network thread
     mutable std::mutex m_dataMutex;
     std::unordered_map<ChunkCoord, std::shared_ptr<std::vector<BlockType>>, ChunkCoordHash> 
         m_chunkData;
-
     std::unordered_set<ChunkCoord, ChunkCoordHash> m_visibleChunks;
 
-    // Mesher
+    // Dirty chunks
+    std::unordered_map<ChunkCoord, std::chrono::steady_clock::time_point, ChunkCoordHash>
+        m_dirty;
+
+    // num neighbors present
+    std::unordered_map<ChunkCoord, uint8_t, ChunkCoordHash> m_neighborsPresent;
+
     ChunkMesher m_mesher;
 
     // GPU meshes
     std::unordered_map<ChunkCoord, GpuMesh, ChunkCoordHash> m_gpuMeshes;
-    std::list<ChunkCoord> m_lru;  // most-recently-touched
+    std::queue<MeshData> m_readyToUpload;
+
+    std::list<ChunkCoord> m_lru;
     std::unordered_map<ChunkCoord, std::list<ChunkCoord>::iterator, ChunkCoordHash> m_lruPos;
-    size_t m_maxResidentMeshes = 4096;  // vram
+    size_t m_maxResidentMeshes = 4096;
     void touch(const ChunkCoord& c);
     void evictIfNeeded();
 
-    // helper 
     int distSqToPlayer(const ChunkCoord& c) const;
+
+    // ---- tunables ----
+    int    m_renderRadius     = WorldCfg::RENDER_DISTANCE;
+    float  m_maxPartialWaitMs = 250.f;
+    size_t m_targetQueueDepth = 64;
+    int    m_uploadsPerFrame  = 16;
 };

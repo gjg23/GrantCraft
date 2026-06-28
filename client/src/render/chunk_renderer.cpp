@@ -21,8 +21,6 @@ void ChunkRenderer::evictIfNeeded() {
             mit->second.release();
             m_gpuMeshes.erase(mit);
         }
-        m_visibleChunks.erase(victim);
-        m_chunkData.erase(victim);
 
         if (onMeshEvicted) onMeshEvicted(victim);
     }
@@ -96,15 +94,24 @@ ChunkRenderer::~ChunkRenderer() {
 void ChunkRenderer::onChunkReceived(const ChunkCoord& coord, std::vector<BlockType> blocks) {
     std::lock_guard<std::mutex> lk(m_dataMutex);
 
-    // Store (or replace) block data
+    bool wasPresent = m_chunkData.count(coord) > 0;
     m_chunkData[coord] = std::make_shared<std::vector<BlockType>>(std::move(blocks));
 
-    // Mesh this chunk + all 6 face-neighbours that already have data.
-    enqueueMesh(coord);
+    // new node tell neighbors
+    if (!wasPresent) {
+        m_neighborsPresent[coord] = countPresentNeighbors(coord);
+        for (const auto& d : kDirs) {
+            ChunkCoord nc{ coord.x + d.x, coord.y + d.y, coord.z + d.z };
+            auto it = m_neighborsPresent.find(nc);
+            if (it != m_neighborsPresent.end()) ++it->second;
+        }
+    }
+
+    if (withinRenderRange(coord)) markDirty(coord);
+
     for (const auto& d : kDirs) {
-        ChunkCoord nc{coord.x + d.x, coord.y + d.y, coord.z + d.z};
-        if (m_chunkData.count(nc))
-            enqueueMesh(nc);
+        ChunkCoord nc{ coord.x + d.x, coord.y + d.y, coord.z + d.z };
+        if (m_chunkData.count(nc) && withinRenderRange(nc)) markDirty(nc);
     }
 }
 
@@ -119,48 +126,62 @@ void ChunkRenderer::setChunkVisible(const ChunkCoord& coord, bool visible) {
 // onChunkRemoved - main thread only
 // ---------------------------------------------------------------------------
 void ChunkRenderer::onChunkRemoved(const ChunkCoord& coord) {
-    {
-        std::lock_guard<std::mutex> lk(m_dataMutex);
+    std::lock_guard<std::mutex> lk(m_dataMutex);
 
-        m_mesher.cancel(coord);
-        m_visibleChunks.erase(coord);
+    m_mesher.cancel(coord);
+    m_visibleChunks.erase(coord);
 
-        m_chunkData.erase(coord);
+    bool wasPresent = m_chunkData.count(coord) > 0;
+    m_chunkData.erase(coord);
+    m_dirty.erase(coord);
+    m_neighborsPresent.erase(coord);
 
+    // faces now exposed
+    if (wasPresent) {
         for (const auto& d : kDirs) {
             ChunkCoord nc{ coord.x + d.x, coord.y + d.y, coord.z + d.z };
-            if (m_chunkData.count(nc)) {
-                enqueueMesh(nc);
+            auto it = m_neighborsPresent.find(nc);
+            if (it != m_neighborsPresent.end()) {
+                if (it->second > 0) --it->second;
+                if (withinRenderRange(nc)) markDirty(nc);
             }
         }
     }
+
+    // Drop the GPU mesh now
+    auto mit = m_gpuMeshes.find(coord);
+    if (mit != m_gpuMeshes.end()) { mit->second.release(); m_gpuMeshes.erase(mit); }
+    auto lit = m_lruPos.find(coord);
+    if (lit != m_lruPos.end()) { m_lru.erase(lit->second); m_lruPos.erase(lit); }
 }
 
 // ---------------------------------------------------------------------------
 // render - main thread, called every frame
 // ---------------------------------------------------------------------------
 void ChunkRenderer::render(const glm::mat4& proj, const glm::mat4& view) {
-    m_mesher.drain([this](MeshData&& md) {
+    pumpMeshJobs(); // feed workers
+    
+    // collect finished meshes
+    m_mesher.drain([this](MeshData&& md) { m_readyToUpload.push(std::move(md)); });
+
+    int uploads = 0;
+    while (!m_readyToUpload.empty() && uploads < m_uploadsPerFrame) {
+        MeshData md = std::move(m_readyToUpload.front());
+        m_readyToUpload.pop();
+
         if (md.idxs.empty()) {
             auto it = m_gpuMeshes.find(md.coord);
-            if (it != m_gpuMeshes.end()) {
-                it->second.release();
-                m_gpuMeshes.erase(it);
-            }
-            // Also remove from LRU so evictIfNeeded doesn't trip on a
-            // coord that has no mesh
+            if (it != m_gpuMeshes.end()) { it->second.release(); m_gpuMeshes.erase(it); }
             auto lit = m_lruPos.find(md.coord);
-            if (lit != m_lruPos.end()) {
-                m_lru.erase(lit->second);
-                m_lruPos.erase(lit);
-            }
-            return;
+            if (lit != m_lruPos.end()) { m_lru.erase(lit->second); m_lruPos.erase(lit); }
+            continue;
         }
         m_gpuMeshes[md.coord].upload(md.verts, md.idxs);
-        touch(md.coord);   // ← mark as recently used
-    });
+        touch(md.coord);
+        ++uploads;
+    }
 
-    evictIfNeeded();       // ← shed oldest meshes if over budget
+    evictIfNeeded();
 
     std::unordered_set<ChunkCoord, ChunkCoordHash> visibleSnapshot;
     {
@@ -185,6 +206,53 @@ void ChunkRenderer::render(const glm::mat4& proj, const glm::mat4& view) {
     }
 
     glBindVertexArray(0);
+}
+
+void ChunkRenderer::pumpMeshJobs() {
+    using namespace std::chrono;
+
+    // Keep the worker + upload pipeline filled to target depth
+    size_t pending = m_mesher.queueSize() + m_readyToUpload.size();
+    if (pending >= m_targetQueueDepth) return;
+    int budget = static_cast<int>(m_targetQueueDepth - pending);
+
+    std::lock_guard<std::mutex> lk(m_dataMutex);
+    if (m_dirty.empty()) return;
+
+    const auto now = steady_clock::now();
+    std::vector<ChunkCoord> ready;
+    ready.reserve(m_dirty.size());
+
+    for (auto it = m_dirty.begin(); it != m_dirty.end(); ) {
+        const ChunkCoord& c = it->first;
+
+        // Drop if data is gone
+        if (!m_chunkData.count(c) || !withinRenderRange(c)) {
+            it = m_dirty.erase(it);
+            continue;
+        }
+
+        float waitedMs = duration<float, std::milli>(now - it->second).count();
+
+        // Eligibility: all 6 neighbours present, OR it has waited long enough
+        if (neighborCount(c) == 6 || waitedMs >= m_maxPartialWaitMs)
+            ready.push_back(c);
+        // else: hold for neighbours to arrive.
+        ++it;
+    }
+    if (ready.empty()) return;
+
+    // Priority: nearest first
+    int n = std::min<int>(static_cast<int>(ready.size()), budget);
+    std::partial_sort(ready.begin(), ready.begin() + n, ready.end(),
+        [this](const ChunkCoord& a, const ChunkCoord& b) {
+            return distSqToPlayer(a) < distSqToPlayer(b);
+        });
+
+    for (int i = 0; i < n; ++i) {
+        enqueueMesh(ready[i]);
+        m_dirty.erase(ready[i]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -222,4 +290,53 @@ int ChunkRenderer::distSqToPlayer(const ChunkCoord& c) const {
     int dy = c.y - m_playerChunk.y;
     int dz = c.z - m_playerChunk.z;
     return dx*dx + dy*dy + dz*dz;
+}
+
+// ---------------------------------------------------------------------------
+// Dependency / eligibility bookkeeping
+// ---------------------------------------------------------------------------
+uint8_t ChunkRenderer::countPresentNeighbors(const ChunkCoord& c) const {
+    uint8_t n = 0;
+    for (const auto& d : kDirs)
+        if (m_chunkData.count({ c.x + d.x, c.y + d.y, c.z + d.z })) ++n;
+    return n;
+}
+
+uint8_t ChunkRenderer::neighborCount(const ChunkCoord& c) const {
+    auto it = m_neighborsPresent.find(c);
+    return it != m_neighborsPresent.end() ? it->second : 0;
+}
+
+bool ChunkRenderer::withinRenderRange(const ChunkCoord& c) const {
+    int dx = std::abs(c.x - m_playerChunk.x);
+    int dy = std::abs(c.y - m_playerChunk.y);
+    int dz = std::abs(c.z - m_playerChunk.z);
+    return std::max({ dx, dy, dz }) <= m_renderRadius;
+}
+
+void ChunkRenderer::markDirty(const ChunkCoord& c) {
+    m_dirty.try_emplace(c, std::chrono::steady_clock::now());
+}
+
+
+// ---------------------------------------------------------------------------
+// setPlayerChunk + refreshRenderRegion  in main
+// ---------------------------------------------------------------------------
+void ChunkRenderer::setPlayerChunk(const ChunkCoord& c) {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
+    if (c == m_playerChunk) return;
+    m_playerChunk = c;
+    refreshRenderRegion();
+}
+
+void ChunkRenderer::refreshRenderRegion() {
+    const int R = m_renderRadius;
+    for (int dx = -R; dx <= R; ++dx)
+    for (int dy = -R; dy <= R; ++dy)
+    for (int dz = -R; dz <= R; ++dz) {
+        ChunkCoord c{ m_playerChunk.x + dx, m_playerChunk.y + dy, m_playerChunk.z + dz };
+        if (!m_chunkData.count(c)) continue;   // no data yet
+        if (m_gpuMeshes.count(c))  continue;   // already meshed
+        markDirty(c);
+    }
 }

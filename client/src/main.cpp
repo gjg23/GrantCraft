@@ -145,6 +145,7 @@ int main(int argc, char* argv[]) {
     Renderer renderer;
     DayNightCycle dayNight;
     renderer.init(skyShader, blockShader, loadTexture("textures/atlas_2.png"));
+    renderer.setRenderRadius(WorldCfg::RENDER_DISTANCE);
 
     renderer.setMeshEvictedCallback([&client](const ChunkCoord& c) {
         client.markRendererReleased(c);
