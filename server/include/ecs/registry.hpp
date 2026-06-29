@@ -1,12 +1,12 @@
 #pragma once
 // -------------------------------------------------
 // server/ecs/registry.hpp
-// ECS registry
-// maps entity ID -> component maps
+// ECS registry: maps entity ID -> component maps
 // -------------------------------------------------
 
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 #include "ecs/components.hpp"
 
 class Registry {
@@ -19,10 +19,12 @@ public:
         interests.erase(e);
     }
 
-    // Component access — returns nullptr if not present
-    PositionComp*      position(EntityId e) { auto it = positions.find(e); return it!=positions.end() ? &it->second : nullptr; }
-    NetworkComp*       network (EntityId e) { auto it = networks.find(e);  return it!=networks.end()  ? &it->second : nullptr; }
-    ChunkInterestComp* interest(EntityId e) { auto it = interests.find(e); return it!=interests.end() ? &it->second : nullptr; }
+    // Component access
+    PositionComp*       position(EntityId e)       { auto it = positions.find(e); return it!=positions.end() ? &it->second : nullptr; }
+    const PositionComp* position(EntityId e) const { auto it = positions.find(e); return it!=positions.end() ? &it->second : nullptr; }
+    NetworkComp*        network (EntityId e)       { auto it = networks.find(e);  return it!=networks.end()  ? &it->second : nullptr; }
+    const NetworkComp*  network (EntityId e) const { auto it = networks.find(e);  return it!=networks.end()  ? &it->second : nullptr; }
+    ChunkInterestComp*  interest(EntityId e)       { auto it = interests.find(e); return it!=interests.end() ? &it->second : nullptr; }
 
     // Attach components
     PositionComp&      addPosition(EntityId e) { return positions[e]; }
@@ -30,8 +32,22 @@ public:
     ChunkInterestComp& addInterest(EntityId e) { return interests[e]; }
 
     // Iterate all entities that have a component
-    auto& allPositions() { return positions; }
-    auto& allNetworks()  { return networks; }
+    auto&       allPositions()       { return positions; }
+    const auto& allPositions() const { return positions; }
+    auto&       allNetworks()        { return networks; }
+    const auto& allNetworks()  const { return networks; }
+
+    // collect entity IDs with positions
+    std::vector<EntityId> allPositionIds() const {
+        std::vector<EntityId> ids;
+        ids.reserve(positions.size());
+        for (const auto& [id, _] : positions)
+            ids.push_back(id);
+        return ids;
+    }
+
+    // pre-reserve to avoid rehashing during parallel access
+    void reservePositions(size_t n) { positions.reserve(n); }
 
 private:
     EntityId nextId = 0;

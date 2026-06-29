@@ -1,59 +1,103 @@
-// server/include/scheduler/scheduler.hpp
 #pragma once
+// ======================================================================
+// scheduler/scheduler.hpp
+// Phase-aware IScheduler interface
+// The server hands it one phase at a time
+// ======================================================================
 
-#include <functional>
-#include <cstdint>
+#include "scheduler/task.hpp"
+#include "scheduler/metrics.hpp"
+#include "scheduler/tuning.hpp"
+#include "scheduler/task_pool.hpp"
 
-enum class TaskType {
-    ChunkGenerate,      // generate one chunk
-    ChunkDispatch,      // queue chunk
-    ChunkSend,          // send chunk data to a peer
-    PlayerPhysics,      // update one player's position/velocity
-    EntitySimulation,   // tick a batch of entities
-    NetworkFlush,       // broadcast player states to all clients
-};
+#include <vector>
+#include <chrono>
 
-enum class TaskPriority {
-    Critical = 0,   // must run this tick (e.g. disconnect cleanup)
-    High     = 1,   // player-facing latency sensitive (chunk near player)
-    Normal   = 2,   // routine work
-    Low      = 3,   // background work (distant chunk gen)
-};
-
-struct Task {
-    TaskType     type;
-    TaskPriority priority  = TaskPriority::Normal;
-    std::function<void()> work;
-
-    // Metadata — unused by FifoScheduler, read by AdaptiveScheduler
-    uint64_t enqueuedAtUs = 0;   // timestamp when task was submitted
-    float    estimatedMs  = 0.f; // expected wall-clock cost (learned over time)
-};
-
-// ------------------------------------------------------------------
-// IScheduler
-// The server calls enqueue() to submit work and tick() once per
-// server tick to drain the queue within the available time budget.
-// All scheduling policy lives behind this interface — swapping
-// FifoScheduler for AdaptiveScheduler is a one-line change in
-// Server::init().
-// ------------------------------------------------------------------
 class IScheduler {
 public:
     virtual ~IScheduler() = default;
 
-    virtual void enqueue(Task t)       = 0;
+    // ---- Lifecycle ----
+    virtual void beginFrame(uint64_t tickStartUs, float totalBudgetMs, ServerTuning& tuning) = 0;
 
-    // Run queued tasks until budgetMs of wall time is consumed.
-    // Implementations may run fewer tasks if the queue empties first.
-    virtual void tick(float budgetMs)  = 0;
+    // Execute one phase
+    virtual PhaseResult runPhase(TaskPhase phase, std::vector<Task>& tasks, float subBudgetMs) = 0;
 
-    // Called by the server after each tick with observed metrics.
-    // FifoScheduler ignores this; AdaptiveScheduler uses it to
-    // adjust weights.
-    virtual void reportMetrics(
-        float    tickDurationMs,    // how long last tick actually took
-        uint32_t queueDepth,        // tasks still pending
-        uint32_t bytesSentThisTick  // network pressure
-    ) {}
+    // Called after all six phases
+    // Returns full metrics snapshot
+    virtual SchedulerMetrics endFrame() = 0;
+
+    // Shared infrastructure
+    void setTaskPool(TaskPool* pool) { m_pool = pool; }
+    TaskPool* taskPool() const { return m_pool; }
+
+protected:
+    TaskPool*      m_pool           = nullptr;
+    ServerTuning*  m_tuning         = nullptr;
+    uint64_t       m_frameStartUs   = 0;
+    float          m_totalBudgetMs  = 0.f;
+
+    // ---- Shared helpers ----
+    // Execute a single task, measure cost, update cost table
+    void executeTask(Task& task, CostTable& costTable) {
+        using Clock = std::chrono::steady_clock;
+        auto t0 = Clock::now();
+        if (task.work) task.work();
+        auto t1 = Clock::now();
+        float ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
+        task.measuredMs = ms;
+        costTable.update(task.type, ms);
+    }
+
+    // Separate a phase's tasks into pool-eligible and main-thread-only
+    struct PhaseBuckets {
+        std::vector<Task*> poolTasks;
+        std::vector<Task*> mainTasks;
+    };
+    PhaseBuckets bucketTasks(std::vector<Task>& tasks) {
+        PhaseBuckets b;
+        for (auto& t : tasks) {
+            if (t.runLocation == RunLocation::PoolEligible)
+                b.poolTasks.push_back(&t);
+            else
+                b.mainTasks.push_back(&t);
+        }
+        // Mandatory first within each bucket
+        auto cmp = [](const Task* a, const Task* b) {
+            return (a->mandatory && !b->mandatory);
+        };
+        std::stable_sort(b.poolTasks.begin(), b.poolTasks.end(), cmp);
+        std::stable_sort(b.mainTasks.begin(), b.mainTasks.end(), cmp);
+        return b;
+    }
+
+    // Submit pool tasks, bounded by estimated cost
+    // Returns count of deferred pool tasks
+    uint32_t submitPoolTasks(std::vector<Task*>& poolTasks, 
+                            float& remainingBudgetMs,
+                            CostTable& costTable)
+    {
+        uint32_t deferred = 0;
+        for (auto* t : poolTasks) {
+            float est = costTable.getEstimatedMs(t->type);
+            if (!t->mandatory && est > remainingBudgetMs) {
+                ++deferred;
+                continue;
+            }
+            if (!t->mandatory) remainingBudgetMs -= est;
+
+            Task* tp = t;
+            CostTable* ct = &costTable;
+            m_pool->submit([tp, ct]() {
+                using Clock = std::chrono::steady_clock;
+                auto t0 = Clock::now();
+                if (tp->work) tp->work();
+                auto t1 = Clock::now();
+                float ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
+                tp->measuredMs = ms;
+                ct->update(tp->type, ms);
+            });
+        }
+        return deferred;
+    }
 };

@@ -39,7 +39,7 @@ int main(int argc, char* argv[]) {
     CommandLineOptions opt;
     if (!parse(argc, argv, opt)) return 1;
 
-    bool singleplayer = !opt.isBench;
+    bool singleplayer = opt.singleplayer;
 
     if (!singleplayer && opt.port == 0) {
         fprintf(stderr, "Usage: %s [host port]\n", argv[0]);

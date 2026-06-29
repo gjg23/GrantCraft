@@ -26,9 +26,7 @@ struct CommandLineOptions {
 
     const char* benchOutput = nullptr;
 
-    bool singleplayer() const {
-        return host == nullptr;
-    }
+    bool singleplayer = true;
 };
 
 bool requireValue(int argc, int i) {
@@ -56,12 +54,14 @@ bool parse(int argc, char* argv[], CommandLineOptions& opt) {
                 return false;
 
             opt.host = argv[++i];
+            opt.singleplayer = false;
         }
         else if (arg == "--port") {
             if (!requireValue(argc, i))
                 return false;
 
             opt.port = static_cast<uint16_t>(std::stoi(argv[++i]));
+            opt.singleplayer = false;
         }
         else if (arg == "--user") {
             if (!requireValue(argc, i))

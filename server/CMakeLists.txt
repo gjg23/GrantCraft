@@ -53,6 +53,10 @@ set_target_properties(chunk_core PROPERTIES
 # ----- Server lib -----
 add_library(server_lib STATIC
     src/server.cpp
+    src/scheduler/task_pool.cpp
+    src/scheduler/fifo_sched.cpp
+    src/scheduler/adaptive_sched.cpp
+    src/scheduler/priortity_sched.cpp
 )
 target_include_directories(server_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

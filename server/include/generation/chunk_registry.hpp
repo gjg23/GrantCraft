@@ -10,6 +10,7 @@
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
+#include <algorithm>
 
 using EntityId = uint32_t;
 
@@ -28,6 +29,9 @@ struct ChunkEntry {
 
     // Entities that have already received this chunk this session
     std::vector<EntityId> sentRecipients;
+
+    // When the chunk was first requested
+    uint64_t requestedAtUs = 0;
 };
 
 // debugging stats
@@ -39,9 +43,14 @@ struct RegistryStats {
     uint32_t totalPendingRecipients = 0;
 };
 
+// For distance-sorted queries
+struct RequestedChunkWithDist {
+    ChunkCoord coord;
+    int distSq;
+};
+
 // ---------------------------------------------------------------
 // ChunkRegistry
-// All methods must be called from the main server thread only
 // ---------------------------------------------------------------
 class ChunkRegistry {
 public:
@@ -49,7 +58,7 @@ public:
     bool has(const ChunkCoord& coord) const;
 
     // Request a chunk for a subscriber in any state
-    void request(const ChunkCoord& coord, EntityId subscriber);
+    void request(const ChunkCoord& coord, EntityId subscriber, uint64_t nowUs = 0);
 
     // Forget all interest from one entity
     void removeSubscriber(EntityId id, const ChunkCoord& coord);
@@ -63,17 +72,19 @@ public:
     // Generating → WorldReady
     void markWorldReady(const ChunkCoord& coord);
     // pending → sent
-    bool markSentTo(const ChunkCoord& coord, EntityId id);
+    bool markSentTo(const ChunkCoord& coord, EntityId id, uint64_t nowUs = 0);
 
     // Collect all WorldReady chunks that still have pending recipients
     struct SendWork {
-        ChunkCoord             coord;
-        std::vector<EntityId>  recipients;  // copy, safe to iterate
+        ChunkCoord              coord;
+        std::vector<EntityId>   recipients;
+        uint64_t                requestedAtUs = 0;
     };
     std::vector<SendWork> collectSendWork() const;
 
     // Collect all Requested chunks (not yet submitted to worker pool)
     std::vector<ChunkCoord> collectRequested() const;
+    std::vector<RequestedChunkWithDist> collectRequestedByDistance(ChunkCoord center) const;
 
     // Remove a chunk entirely
     void remove(const ChunkCoord& coord);
@@ -82,6 +93,15 @@ public:
     std::size_t size() const { return entries.size(); }
     RegistryStats getStats() const;
 
+    // Latency samples
+    const std::vector<float>& getLatencySamplesMs() const {
+        return m_latencySamples;
+    }
+    void clearLatencySamples() { m_latencySamples.clear(); }
+
 private:
     std::unordered_map<ChunkCoord, ChunkEntry, ChunkCoordHash> entries;
+    
+    std::vector<float> m_latencySamples;    // delivery latency in ms
+    static constexpr size_t MAX_LATENCY_SAMPLES = 4096;
 };
