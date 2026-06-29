@@ -18,13 +18,24 @@ void ChunkRegistry::request(const ChunkCoord& coord, EntityId subscriber, uint64
         entry.requestedAtUs = nowUs;
     }
 
-    // Add subscriber to pending if not already there and not NULL_ENTITY
-    if (subscriber != 0) {
-        auto& pending = entry.pendingRecipients;
-        if (std::find(pending.begin(), pending.end(), subscriber) == pending.end()) {
-            pending.push_back(subscriber);
-        }
-    }
+    if (subscriber == 0) return;  // spawn/no-recipient request
+
+    const bool alreadyPending =
+        std::find(entry.pendingRecipients.begin(),
+                  entry.pendingRecipients.end(), subscriber)
+            != entry.pendingRecipients.end();
+    const bool alreadySent =
+        std::find(entry.sentRecipients.begin(),
+                  entry.sentRecipients.end(), subscriber)
+            != entry.sentRecipients.end();
+
+    if (alreadyPending || alreadySent) return;
+
+    entry.pendingRecipients.push_back(subscriber);
+
+    // get from world state
+    if (entry.state == ChunkLifecycle::Sent)
+        entry.state = ChunkLifecycle::WorldReady;
 }
 
 void ChunkRegistry::removeSubscriber(EntityId id, const ChunkCoord& coord) {

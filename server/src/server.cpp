@@ -22,7 +22,8 @@ bool Server::init(uint16_t port, ServerMode mode) {
     address.host = ENET_HOST_ANY;
     address.port = port;
 
-    net_host = enet_host_create(&address, 64, CHANNEL_COUNT, 0, 0);
+    constexpr size_t kMaxPeers = 512;
+    net_host = enet_host_create(&address, kMaxPeers, CHANNEL_COUNT, 0, 0);
     if (!net_host) {
         fprintf(stderr, "[Server] Failed to create ENet host on port %u\n", port);
         return false;

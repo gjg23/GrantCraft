@@ -68,7 +68,7 @@ void TaskPool::workerLoop() {
         task();
 
         if (m_pendingCount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-            // This was the last pending task — wake waitAll
+            std::lock_guard<std::mutex> lk(m_waitMutex);
             m_waitCV.notify_all();
         }
     }

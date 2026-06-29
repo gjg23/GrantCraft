@@ -29,8 +29,8 @@ struct ServerTuning {
     int      taskPoolThreadCount         = -1;
 
     // ---- Interest ----
-    // int      renderDistance              = 8;    // These would be set by client settings
-    // int      simulationDistance          = 12;
+    int      renderDistance              = 8;    // These would be set by client settings
+    int      simulationDistance          = 12;
     uint32_t maxInterestRecomputesPerTick= UINT32_MAX;
     uint32_t maxNewSubscriptionsPerTick  = 500;
 
