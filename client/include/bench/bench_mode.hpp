@@ -1,4 +1,6 @@
 #pragma once
+// bench/bench_mode.hpp
+
 #include <cstdint>
 
 void runBenchMode(const char* host, uint16_t port,

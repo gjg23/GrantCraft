@@ -39,7 +39,9 @@ int main(int argc, char* argv[]) {
     CommandLineOptions opt;
     if (!parse(argc, argv, opt)) return 1;
 
-    if (!opt.singleplayer && opt.port == 0) {
+    bool singleplayer = opt.singleplayer;
+
+    if (!singleplayer && opt.port == 0) {
         fprintf(stderr, "Usage: %s [host port]\n", argv[0]);
         return 1;
     }
@@ -124,31 +126,31 @@ int main(int argc, char* argv[]) {
         Input         input;
         input.init(win.handle);
 
-        // Remote players populated by Client::onReceive — keyed by player ID
-        std::unordered_map<uint32_t, RemotePlayer> remotePlayers;
+    // Remote players populated by Client::onReceive — keyed by player ID
+    std::unordered_map<uint32_t, RemotePlayer> remotePlayers;
+    
+    // ------------------------------------------------------------------
+    // renderer
+    // ------------------------------------------------------------------
+    unsigned int skyShader   = loadShader("shaders/sky.vert",   "shaders/sky.frag");
+    unsigned int blockShader = loadShader("shaders/basic.vert", "shaders/basic.frag");
+    if (!skyShader || !blockShader) {
+        fprintf(stderr, "Shader loading failed\n");
+        exit(EXIT_FAILURE);
+    }
+    Renderer renderer;
+    DayNightCycle dayNight;
+    renderer.init(skyShader, blockShader, loadTexture("textures/atlas_2.png"));
 
-        // ------------------------------------------------------------------
-        // renderer
-        // ------------------------------------------------------------------
-        unsigned int skyShader   = loadShader("shaders/sky.vert",   "shaders/sky.frag");
-        unsigned int blockShader = loadShader("shaders/basic.vert", "shaders/basic.frag");
-        if (!skyShader || !blockShader) {
-            fprintf(stderr, "Shader loading failed\n");
-            exit(EXIT_FAILURE);
-        }
-        Renderer renderer;
-        DayNightCycle dayNight;
-        renderer.init(skyShader, blockShader, loadTexture("textures/atlas_2.png"));
-
-        // ------------------------------------------------------------------
-        // Connect to the server (local or remote)
-        // ------------------------------------------------------------------
-        printf("Connecting to %s:%u.\n", opt.host, opt.port);
-        Client client;
-        if (!client.connect(opt.host, opt.port, "Player1")) {
-            fprintf(stderr, "Could not connect to server.\n");
-            exit(EXIT_FAILURE);
-        }
+    // ------------------------------------------------------------------
+    // Connect to the server (local or remote)
+    // ------------------------------------------------------------------
+    printf("Connecting to %s:%u.\n", opt.host, opt.port);
+    Client client;
+    if (!client.connect(opt.host, opt.port, "Player1")) {
+        fprintf(stderr, "Could not connect to server.\n");
+        exit(EXIT_FAILURE);
+    }
 
         // ------------------------------------------------------------------
         // Main loop
@@ -159,10 +161,10 @@ int main(int argc, char* argv[]) {
             float dt  = now - lastTime;
             lastTime  = now;
 
-            // Input + local movement
-            input.dt = dt;
-            input.update(win.handle, localPlayer, win.isCursorLocked());
-            if (input.escapePressed) win.toggleCursor();
+        // Input + local movement
+        input.dt = dt;
+        input.update(win.handle, localPlayer, win.isCursorLocked());
+        if (input.escapePressed) win.toggleCursor();
 
             auto tierDelta = client.updatePlayerChunk(
                 localPlayer.state.position.x,
@@ -170,32 +172,32 @@ int main(int argc, char* argv[]) {
                 localPlayer.state.position.z
             );
 
-            // Apply movement-driven chunk transitions for already-cached chunks.
+        // Apply movement-driven chunk transitions for already-cached chunks.
 
-            // 1) Chunks that must become renderer-resident again
-            for (const auto& coord : tierDelta.toLoadRenderer) {
-                std::vector<BlockType> blocks;
-                if (client.copyChunkBlocks(coord, blocks)) {
-                    renderer.submitChunk(coord, std::move(blocks));
-                    client.markRendererResident(coord);
-                }
+        // 1) Chunks that must become renderer-resident again
+        for (const auto& coord : tierDelta.toLoadRenderer) {
+            std::vector<BlockType> blocks;
+            if (client.copyChunkBlocks(coord, blocks)) {
+                renderer.submitChunk(coord, std::move(blocks));
+                client.markRendererResident(coord);
             }
+        }
 
-            // 2) Chunks entering render distance: show
-            for (const auto& coord : tierDelta.toShow) {
-                renderer.setChunkVisible(coord, true);
-            }
+        // 2) Chunks entering render distance: show
+        for (const auto& coord : tierDelta.toShow) {
+            renderer.setChunkVisible(coord, true);
+        }
 
-            // 3) Chunks leaving render distance but still inside simulation distance: hide only
-            for (const auto& coord : tierDelta.toHide) {
-                renderer.setChunkVisible(coord, false);
-            }
+        // 3) Chunks leaving render distance but still inside simulation distance: hide only
+        for (const auto& coord : tierDelta.toHide) {
+            renderer.setChunkVisible(coord, false);
+        }
 
-            // 4) Chunks leaving simulation distance entirely: drop renderer-side storage
-            for (const auto& coord : tierDelta.toDropRenderer) {
-                renderer.removeChunk(coord);
-                client.markRendererReleased(coord);
-            }
+        // 4) Chunks leaving simulation distance entirely: drop renderer-side storage
+        for (const auto& coord : tierDelta.toDropRenderer) {
+            renderer.removeChunk(coord);
+            client.markRendererReleased(coord);
+        }
 
             // Send predicted position to server
             if (client.isConnected()) {

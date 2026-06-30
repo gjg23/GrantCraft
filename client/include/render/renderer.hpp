@@ -49,8 +49,8 @@ struct SkyUniforms {
 // ------------------------------------------------------------------
 class DayNightCycle {
 public:
-    float timeOfDay = 0.25f; // start at morning
-    float speed     = 0.005f;
+    float timeOfDay = 0.0f; // start at morning
+    float speed     = 0.0025f;
 
     void update(float dt);
     void fill(RenderContext& ctx);
@@ -88,6 +88,21 @@ public:
     void waitMeshIdle() { m_chunkRenderer.waitIdle(); }
  
     void cleanup();
+
+    bool hasMesh(ChunkCoord coord) { return m_chunkRenderer.hasMesh(coord); }
+
+    void setMeshEvictedCallback(std::function<void(const ChunkCoord&)> cb) {
+        m_chunkRenderer.onMeshEvicted = std::move(cb);
+    }
+    bool hasChunkMesh(const ChunkCoord& c) const {
+        return m_chunkRenderer.hasMesh(c);
+    }
+
+    void setPlayerChunk(const ChunkCoord& c) {
+        m_chunkRenderer.setPlayerChunk(c);
+    }
+
+    void setRenderRadius(int r) { m_chunkRenderer.setRenderRadius(r); }
 
 private:
     // Programs

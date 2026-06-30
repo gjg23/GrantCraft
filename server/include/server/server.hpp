@@ -1,18 +1,7 @@
 #pragma once
 // =======================================================================
 // server.hpp
-// The authoritative game server.
-// Responsibilities:
-//   - Accept / disconnect ENet peers
-//   - Receive client input packets
-//   - Advance ECS (position, physics, validation)
-//   - Drive chunk pipeline via ChunkSystem
-//   - Dispatch work through IScheduler
-//   - Broadcast world state back to all clients
-//
-// Used by two entry points:
-//   1. server/main.cpp     - standalone dedicated server binary
-//   2. client/local_server - embedded server for singleplayer
+// The authoritative game server using task scheduling
 // =======================================================================
 
 #include <enet/enet.h>
@@ -21,6 +10,7 @@
 #include <mutex>
 #include <vector>
 #include <memory>
+#include <chrono>
 
 #include "net/net_common.hpp"
 #include "ecs/registry.hpp"
@@ -30,18 +20,34 @@
 #include "generation/chunk_interest.hpp"
 
 #include "scheduler/scheduler.hpp"
-#include "scheduler/fifo_sched.hpp"
+#include "scheduler/task_pool.hpp"
+#include "scheduler/frame_plan.hpp"
+#include "scheduler/tuning.hpp"
+#include "scheduler/metrics.hpp"
 
 #include "world/world_state.hpp"
 
 enum class ServerMode { CPU, GPU };
 
+// ---- Per-tick intermediate data used by phase tasks ----
+struct BuiltChunkPacket {
+    ChunkCoord             coord;
+    ENetPacket*            packet     = nullptr;
+    uint32_t               packetSize = 0;
+    std::vector<EntityId>  recipients;
+    int                    minDistSq  = 0;
+};
+
 class Server {
 public:
-    bool init(uint16_t port, ServerMode mode = ServerMode::CPU);   // start listening on the given port
-    void tick(float dt);        // Single tick for client management
-    void shutdown();            // shutdown server
+    bool init(uint16_t port, ServerMode mode = ServerMode::CPU);
+    void tick(float dt);
+    void shutdown();
     bool isRunning() const { return net_running; }
+
+    // Accessors for benchmark harness
+    const ServerTuning&      tuning()      const { return m_tuning; }
+    const SchedulerMetrics&  lastMetrics() const { return m_lastMetrics; }
 
 private:
     ServerMode serverMode = ServerMode::CPU;
@@ -53,7 +59,6 @@ private:
     bool      net_running       = false;
     uint32_t  net_nextPlayerId  = 1;
 
-    // Internal packet handlers
     void onConnect   (ENetPeer* peer);
     void onDisconnect(ENetPeer* peer);
     void onReceive   (ENetPeer* peer, ENetPacket* packet);
@@ -63,7 +68,6 @@ private:
     // =========================================================
     Registry ecs;
 
-    // map from network layer to ECS
     std::unordered_map<ENetPeer*, EntityId> peerToEntity;
     std::mutex playersMutex;
 
@@ -72,34 +76,68 @@ private:
     // =========================================================
     WorldState world;
 
-    // =========================================================
-    // Chunk pipeline
-    // =========================================================
-    // main thread
     ChunkRegistry                    chunkRegistry;
     std::unique_ptr<ChunkWorkerPool> workerPool;
     ChunkInterestSystem              chunkInterest;
+
     void generate_spawn_chunks();
 
     // =========================================================
-    // Scheduler
+    // Scheduler infrastructure
     // =========================================================
     std::unique_ptr<IScheduler> scheduler;
+    TaskPool                    taskPool;
+    ServerTuning                m_tuning;
+    SchedulerMetrics            m_lastMetrics;
+    FramePlan                   m_framePlan;
 
     // =========================================================
-    // Systems (called by tick via scheduler)
+    // Frame plan builder: sets tasks for each phase
     // =========================================================
-    void systemPlayerPhysics (float dt);    // integrate velocity, apply gravity
-    void systemInterestUpdate(float dt);    // enqueue chunks players need
-    void systemChunkDispatch (float dt);    // registry + worker pool
-    void systemNetworkFlush  (float dt);    // broadcast player states + ready chunks
+    void buildFramePlan(FramePlan& plan, float dt, uint64_t tickStartUs);
 
+    // Per-phase tasks
+    void emitIngestTasks      (FramePlan& plan, float dt, uint64_t tickStartUs);
+    void emitSimulationTasks  (FramePlan& plan, float dt, uint64_t tickStartUs);
+    void emitInterestTasks    (FramePlan& plan, float dt, uint64_t tickStartUs);
+    void emitDispatchTasks    (FramePlan& plan, float dt, uint64_t tickStartUs);
+    void emitFlushTasks       (FramePlan& plan, float dt, uint64_t tickStartUs);
+    void emitBookkeepingTasks (FramePlan& plan, float dt, uint64_t tickStartUs);
+
+    // Per-tick intermediate data
+    std::vector<InterestComputeOutput> m_tickInterestOutputs;
+
+    // ---- task stages ----
+    // Phase 0
+    void taskIngest(float dt);
+
+    // Phase 1
+    void taskPhysicsBatch(const std::vector<EntityId>& entities, float dt);
+
+    // Phase 2
+    void taskInterestCommit();
+
+    // Phase 3
+    void taskDrainCompleted();
+    void taskSubmitGeneration();
+
+    // Phase 4
+    void taskFlushPipeline(uint64_t tickStartUs);
+
+    // Phase 5
+    void taskMetrics();
+
+    // =========================================================
     // Outbound packet helpers
-    uint32_t sendChunkToPeer(ENetPeer* peer, const ChunkCoord& coord);
-    void sendLoadedChunksToPeer(ENetPeer* peer, EntityId id);
-    void broadcastPlayerStates();
+    // =========================================================
+    uint32_t     sendChunkToPeer(ENetPeer* peer, const ChunkCoord& coord);
+    void         sendLoadedChunksToPeer(ENetPeer* peer, EntityId id);
+    void         broadcastPlayerStates();
+    ENetPacket*  buildChunkPacket(const ChunkCoord& coord);
 
+    // =========================================================
     // Debug stats
+    // =========================================================
     uint32_t m_tickCount       = 0;
     uint32_t m_measuredTickHz  = 0;
     float    m_lastTickMs      = 0.f;
@@ -107,4 +145,7 @@ private:
     uint32_t m_bytesSentTick   = 0;
     uint32_t m_bytesRecvTick   = 0;
     uint32_t m_lastBytesSentTick = 0;
+
+    // Phase budget computation
+    void computePhaseBudgets(float budgets[6], float totalBudget) const;
 };

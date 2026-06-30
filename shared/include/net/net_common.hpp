@@ -69,13 +69,15 @@ struct PKT_S_PlayerState {
     PlayerNetState players[64];
 };
 
-// Server -> Client
+// Chunks and encoding
 struct PKT_S_ChunkData {
     PacketType type       = PacketType::S_CHUNK_DATA;
     int32_t    cx, cy, cz;
-    uint32_t   dataSize;    // byte count of the payload that follows this header
-    uint8_t    compressed;  // 1 = RLE-encoded BlockType stream, 0 = raw
+    uint32_t   dataSize;
+    uint8_t    encoding;
 };
+
+enum class ChunkEncoding : uint8_t { Raw = 0, RLE = 1, Uniform = 2, LZ4 = 3 };
 
 inline uint32_t rleEncodeBlocks(const BlockType* src, uint32_t count,
                                 uint8_t* out, uint32_t outCapacity)
@@ -109,6 +111,14 @@ inline bool rleDecodeBlocks(const uint8_t* in, uint32_t inSize,
             out[outPos++] = val;
     }
     return outPos == outCount;
+}
+
+// LZ4 bound
+inline constexpr uint32_t LZ4_MAX_INPUT_SIZE = 0x7E000000u;
+inline constexpr uint32_t lz4CompressBound(uint32_t inputSize) {
+    return (inputSize > LZ4_MAX_INPUT_SIZE)
+        ? 0u
+        : inputSize + (inputSize / 255u) + 16u;
 }
 
 

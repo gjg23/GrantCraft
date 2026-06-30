@@ -44,6 +44,7 @@ target_link_libraries(chunk_core PUBLIC
     gpu_terrain
     CUDA::cudart
 )
+target_link_libraries(chunk_core PRIVATE lz4) # compression for chunks
 set_target_properties(chunk_core PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
 )
@@ -52,6 +53,10 @@ set_target_properties(chunk_core PROPERTIES
 # ----- Server lib -----
 add_library(server_lib STATIC
     src/server.cpp
+    src/scheduler/task_pool.cpp
+    src/scheduler/fifo_sched.cpp
+    src/scheduler/adaptive_sched.cpp
+    src/scheduler/priortity_sched.cpp
 )
 target_include_directories(server_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

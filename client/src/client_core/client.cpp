@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <lz4.h>
 
 bool Client::connect(const char* host, uint16_t port,
                      const char* username,
@@ -178,17 +179,53 @@ void Client::onReceive(ENetPacket* packet) {
 
             const uint8_t* payload = packet->data + sizeof(PKT_S_ChunkData);
             std::vector<BlockType> blocks(CHUNK_VOLUME);
+            bool decodeOk = false;
 
-            if (hdr.compressed) {
-                if (!rleDecodeBlocks(payload, hdr.dataSize, blocks.data(), CHUNK_VOLUME)) {
-                    printf("[Client] RLE decode failed for chunk (%d,%d,%d)\n",
-                        hdr.cx, hdr.cy, hdr.cz);
+            switch (static_cast<ChunkEncoding>(hdr.encoding)) {
+                case ChunkEncoding::Uniform: {
+                    if (hdr.dataSize < 1) break;
+                    std::fill(blocks.begin(), blocks.end(),
+                            static_cast<BlockType>(payload[0]));
+                    decodeOk = true;
                     break;
                 }
-            } else {
-                if (hdr.dataSize != CHUNK_VOLUME * sizeof(BlockType)) break;
-                memcpy(blocks.data(), payload, hdr.dataSize);
+                case ChunkEncoding::RLE: {
+                    if (!rleDecodeBlocks(payload, hdr.dataSize,
+                                        blocks.data(), CHUNK_VOLUME)) {
+                        printf("[Client] RLE decode failed for chunk (%d,%d,%d)\n",
+                            hdr.cx, hdr.cy, hdr.cz);
+                        break;
+                    }
+                    decodeOk = true;
+                    break;
+                }
+                case ChunkEncoding::LZ4: {
+                    int got = LZ4_decompress_safe(
+                        reinterpret_cast<const char*>(payload),
+                        reinterpret_cast<char*>(blocks.data()),
+                        static_cast<int>(hdr.dataSize),
+                        CHUNK_VOLUME * static_cast<int>(sizeof(BlockType)));
+                    if (got != CHUNK_VOLUME * static_cast<int>(sizeof(BlockType))) {
+                        printf("[Client] LZ4 decode failed (%d,%d,%d): got %d\n",
+                            hdr.cx, hdr.cy, hdr.cz, got);
+                        break;  // decodeOk stays false
+                    }
+                    decodeOk = true;
+                    break;
+                }
+                case ChunkEncoding::Raw:
+                default: {
+                    if (hdr.dataSize != CHUNK_VOLUME * sizeof(BlockType)) {
+                        printf("[Client] Raw chunk wrong size (%d,%d,%d): %u bytes\n",
+                            hdr.cx, hdr.cy, hdr.cz, hdr.dataSize);
+                        break;
+                    }
+                    memcpy(blocks.data(), payload, hdr.dataSize);
+                    decodeOk = true;
+                    break;
+                }
             }
+            if (!decodeOk) break;
 
             ChunkCoord coord{ hdr.cx, hdr.cy, hdr.cz };
             std::lock_guard<std::mutex> lk(m_chunkMutex);
