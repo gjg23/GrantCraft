@@ -1,4 +1,5 @@
 #pragma once
+// bench/dummy_client.hpp
 // A headless game client that executes a pre-baked movement script in its
 // own thread. Used by the load test to simulate real players.
 

@@ -1,5 +1,6 @@
 #pragma once
-// Single entry point called from main(). Keeps all bench logic out of main.
+// bench/bench_runner.hpp
+// Single entry point called from main()
 
 #include <cstdint>
 

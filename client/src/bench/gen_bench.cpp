@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <vector>
 
-# include "generation/gpu_terrain/kernel.cuh"
+#include "generation/gpu_terrain/kernel.cuh"
 
 constexpr uint32_t GPU_BATCH_SIZE = 1;
 
